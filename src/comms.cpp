@@ -202,8 +202,10 @@ void setup_comms()
     // FALLING from https://github.com/ratgdo/esphome-ratgdo/blob/e248c705c5342e99201de272cb3e6dc0607a0f84/components/ratgdo/ratgdo.cpp#L54C14-L54C14
      */
     RINFO(TAG, "Initialize for obstruction detection");
-    pinMode(INPUT_OBST_PIN, INPUT);
+    #ifdef STATUS_OBST_PIN
     pinMode(STATUS_OBST_PIN, OUTPUT);
+    #endif
+    pinMode(INPUT_OBST_PIN, INPUT);
     attachInterrupt(INPUT_OBST_PIN, isr_obstruction, FALLING);
 
     comms_setup_done = true;
@@ -1617,7 +1619,9 @@ void obstruction_timer()
                 RINFO(TAG, "Obstruction Clear");
                 garage_door.obstructed = false;
                 notify_homekit_obstruction();
+                #ifdef STATUS_OBST_PIN
                 digitalWrite(STATUS_OBST_PIN, garage_door.obstructed);
+                #endif
                 if (motionTriggers.bit.obstruction)
                 {
                     garage_door.motion = false;
@@ -1644,7 +1648,9 @@ void obstruction_timer()
                         RINFO(TAG, "Obstruction Detected");
                         garage_door.obstructed = true;
                         notify_homekit_obstruction();
+                        #ifdef STATUS_OBST_PIN
                         digitalWrite(STATUS_OBST_PIN, garage_door.obstructed);
+                        #endif
                         if (motionTriggers.bit.obstruction)
                         {
                             garage_door.motion = true;
