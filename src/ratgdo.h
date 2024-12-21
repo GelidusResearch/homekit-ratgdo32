@@ -27,28 +27,28 @@
 #include "HomeSpan.h"
 #include "log.h"
 
-#define DEVICE_NAME "homekit-ratgdo"
-#define MANUF_NAME "ratCloud llc"
-#define SERIAL_NUMBER "0P3ND00R"
-#define MODEL_NAME "ratgdo_32"
+#define DEVICE_NAME "homekit-grgdo1"
+#define MANUF_NAME "Geldius Research"
+#define SERIAL_NUMBER "14EVRY1"
+#define MODEL_NAME "GRGDO1"
 #define CHIP_FAMILY "ESP32"
 
 /********************************** PIN DEFINITIONS *****************************************/
 
-const gpio_num_t UART_TX_PIN = GPIO_NUM_17;
+const gpio_num_t UART_TX_PIN = GPIO_NUM_22;
 const gpio_num_t UART_RX_PIN = GPIO_NUM_21;
-const gpio_num_t LED_BUILTIN = GPIO_NUM_2;
-const gpio_num_t INPUT_OBST_PIN = GPIO_NUM_4;
-const gpio_num_t STATUS_DOOR_PIN = GPIO_NUM_26;       // output door status, HIGH for open, LOW for closed
-const gpio_num_t STATUS_OBST_PIN = GPIO_NUM_25;       // output for obstruction status, HIGH for obstructed, LOW for clear
-const gpio_num_t DRY_CONTACT_OPEN_PIN = GPIO_NUM_13;  // dry contact for opening door
-const gpio_num_t DRY_CONTACT_CLOSE_PIN = GPIO_NUM_14; // dry contact for closing door
+const gpio_num_t LED_BUILTIN = GPIO_NUM_4;
+const gpio_num_t INPUT_OBST_PIN = GPIO_NUM_23;
+//const gpio_num_t STATUS_DOOR_PIN = GPIO_NUM_10;       // output door status, HIGH for open, LOW for closed
+//const gpio_num_t STATUS_OBST_PIN = GPIO_NUM_11;       // output for obstruction status, HIGH for obstructed, LOW for clear
+const gpio_num_t DRY_CONTACT_OPEN_PIN = GPIO_NUM_18;  // dry contact for opening door
+const gpio_num_t DRY_CONTACT_CLOSE_PIN = GPIO_NUM_19; // dry contact for closing door
 
-const gpio_num_t BEEPER_PIN = GPIO_NUM_33;
-const gpio_num_t LASER_PIN = GPIO_NUM_23;
-const gpio_num_t SENSOR_PIN = GPIO_NUM_34;
+const gpio_num_t BEEPER_PIN = GPIO_NUM_12;
+const gpio_num_t LASER_PIN = GPIO_NUM_13;
+//const gpio_num_t SENSOR_PIN = GPIO_NUM_14;
 
-const gpio_num_t SHUTDOWN_PIN = GPIO_NUM_32;
+const gpio_num_t SHUTDOWN_PIN = GPIO_NUM_15;
 
 extern uint32_t free_heap;
 extern uint32_t min_heap;

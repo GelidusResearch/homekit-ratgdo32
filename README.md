@@ -1,13 +1,10 @@
 > [!IMPORTANT]
-> This firmware is for the ratgdo32 and ratgdo32-disco series boards. It will not work with the ratgdo v2.5xi boards.
-> HomeKit support for for the original v2.5xi devices can be found [here](https://github.com/ratgdo/homekit-ratgdo)
+> This RATGDO firmware is for the Gelidus Research GRGDO1 board. See [GRGDO1](https://www.gelidus.ca/product/gelidus-research-ac-powered-ratgdo-compatible-board/)
 >
-> **THIS IS EARLY FIRMWARE still under test.
+> **THIS IS EARLY FIRMWARE still under test from the upstream.
 > Future updates MAY include breaking changes requiring a flash erase and re-upload.**
 >
-> Firmware for the new DISCO device is under development. The following features, documented in this README, are not currently available in this version
-> and may never be implemented
-> 
+>
 > * Crashlog display and download.
 > * Locking WiFi to specific WiFi access point.
 > * Setting WiFi protocol version.
@@ -31,11 +28,11 @@ This firmware supports Security+, Security+ 2.0 and Dry Contact enabled garage d
 * Vehicle presence, arrival and departure sensing (ratgdo32-disco board only)
 * Parking assist laser (ratgdo32-disco board only)
 
-Check the [GitHub Issues](https://github.com/ratgdo/homekit-ratgdo32/issues) for planned features, or to suggest your own.
+Check the [GitHub Issues](https://github.com/gelidusresearch/homekit-ratgdo32/issues) for planned features, or to suggest your own.
 
 ## How do I install it?
 
-Connect your ratgdo to a computer with a USB cable and use the [online browser-based flash tool](https://ratgdo.github.io/homekit-ratgdo32/flash.html) to install the firmware.
+Connect your ratgdo to a computer with a USB cable and use the [online browser-based flash tool](https://gelidusresearch.github.io/homekit-ratgdo32/flash.html) to install the firmware.
 
 > [!NOTE]
 > The browser must be able to access a USB serial device. Some browsers block USB access. The Google Chrome browser is known to work and is recommended.
@@ -415,10 +412,10 @@ HomeKit-ratgdo32 uses [PlatformIO](https://platformio.org/platformio-ide) for bu
 Check out this repo:
 
 ```
-git clone --recurse-submodules  https://github.com/ratgdo/homekit-ratgdo32.git
+git clone --recurse-submodules  https://github.com/gelidusresearch/homekit-ratgdo32.git
 ```
 
-The [`x.sh`](https://github.com/ratgdo/homekit-ratgdo32/blob/main/x.sh) script is my lazy way of not
+The [`x.sh`](https://github.com/gelidusresearch/homekit-ratgdo32/blob/main/x.sh) script is my lazy way of not
 having to remember PlatformIO-specific `pio` commands. The important ones are `run`, `upload`, and
 `monitor`.
 

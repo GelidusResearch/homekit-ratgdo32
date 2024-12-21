@@ -6,6 +6,6 @@
 #
 import os
 
-home_dir = os.environ['HOME'];
+home_dir = os.environ.get('HOME') or os.environ.get('USERPROFILE')
 
 os.system("patch -N " + home_dir + "/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/WebServer.cpp url_not_found_log.patch")
