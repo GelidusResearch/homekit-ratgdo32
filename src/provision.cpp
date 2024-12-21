@@ -231,13 +231,13 @@ bool onCommandCallback(improv::ImprovCommand cmd)
     {
         std::vector<std::string> infos = {
             // Firmware name
-            "HomeKit-ratgdo32",
+            "HomeKit-GRGDO1",
             // Firmware version
             AUTO_VERSION,
             // Hardware chip/variant
             "ESP32",
             // Device name
-            "Ratgdo32"};
+            "GRGDO1"};
         std::vector<uint8_t> data = improv::build_rpc_response(improv::GET_DEVICE_INFO, infos, false);
         send_response(data);
         break;

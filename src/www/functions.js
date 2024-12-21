@@ -409,7 +409,7 @@ async function checkVersion(progress) {
     versionElem2.innerHTML = msg;
     const spanDots = document.getElementById(progress);
     const aniDots = dotDotDot(spanDots);
-    const response = await fetch("https://api.github.com/repos/ratgdo/homekit-ratgdo32/releases", {
+    const response = await fetch("https://api.github.com/repos/gelidusresearch/homekit-ratgdo32/releases", {
         method: "GET",
         cache: "no-cache",
         redirect: "follow"
@@ -437,9 +437,9 @@ async function checkVersion(progress) {
     if (latest) {
         console.log("Newest version: " + latest.tag_name);
         const asset = latest.assets.find((obj) => {
-            return (obj.content_type === "application/octet-stream") && obj.name.startsWith("homekit-ratgdo32") && obj.name.includes("firmware");
+            return (obj.content_type === "application/octet-stream") && obj.name.startsWith("homekit-grgdo1") && obj.name.includes("firmware");
         });
-        serverStatus.downloadURL = "https://ratgdo.github.io/homekit-ratgdo32/firmware/" + asset.name;
+        serverStatus.downloadURL = "https://gelidusresearch.github.io/homekit-ratgdo32/firmware/" + asset.name;
         msg = "You have newest release";
         if (serverStatus.firmwareVersion < latest.tag_name) {
             // Newest version at GitHub is greater from that installed
