@@ -237,9 +237,9 @@ void setup_homekit()
     // Define the Garage Door accessory...
     new SpanAccessory();
     new DEV_Info(device_name);
-    new Characteristic::Manufacturer("Ratcloud llc");
+    new Characteristic::Manufacturer("Gelidus Research");
     new Characteristic::SerialNumber(Network.macAddress().c_str());
-    new Characteristic::Model("ratgdo-ESP32");
+    new Characteristic::Model("GRGDO1");
     new Characteristic::FirmwareRevision(AUTO_VERSION);
     door = new DEV_GarageDoor();
 
