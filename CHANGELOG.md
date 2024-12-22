@@ -1,6 +1,6 @@
 # Change Log
 
-**v3.x.x firmware is for ratgdo32 and ratgdo32-disco boards only**
+**v1.x.x firmware is for GRGDO1 boards. This maps to v3.x.x upstream code and aditional local config adjustments**
 
 All notable changes to `homekit-ratgdo32` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 

@@ -624,7 +624,7 @@ async function firmwareUpdate(github = true) {
         clearInterval(aniDots);
         if (showRebootMsg) {
             // Additional 10 seconds for new firmware copy on first boot.
-            countdown(rebootSeconds, rebootMsg + "<br>RATGDO device rebooting...&nbsp;");
+            countdown(rebootSeconds, rebootMsg + "<br>GRGDO1 device rebooting...&nbsp;");
         } else {
             document.getElementById("updateDotDot").style.display = "none";
             document.getElementById("updateDialog").style.display = "block";
@@ -634,17 +634,17 @@ async function firmwareUpdate(github = true) {
 
 async function rebootRATGDO(dialog = true) {
     if (dialog) {
-        let txt = "Reboot RATGDO, are you sure?";
+        let txt = "Reboot GRGDO1, are you sure?";
         if (!confirm(txt)) return;
     }
     var response = await fetch("reboot", {
         method: "POST",
     });
     if (response.status !== 200) {
-        console.warn("Error attempting to reboot RATGDO");
+        console.warn("Error attempting to reboot GRGDO1");
         return;
     }
-    if (dialog) countdown(rebootSeconds, "RATGDO device rebooting...&nbsp;");
+    if (dialog) countdown(rebootSeconds, "GRGDO1 device rebooting...&nbsp;");
 }
 
 async function unpairRATGDO() {
@@ -658,10 +658,10 @@ async function unpairRATGDO() {
     });
     loaderElem.style.visibility = "hidden";
     if (response.status !== 200) {
-        console.warn("Error attempting to unpair and reboot RATGDO");
+        console.warn("Error attempting to unpair and reboot GRGDO1");
         return;
     }
-    countdown(rebootSeconds, "RATGO un-pairing and rebooting...&nbsp;");
+    countdown(rebootSeconds, "GRGDO1 un-pairing and rebooting...&nbsp;");
 }
 
 async function checkAuth(loader = true) {
@@ -706,7 +706,7 @@ async function setGDO(...args) {
                 signal: AbortSignal.timeout(2000),
             });
             if (response.status !== 200) {
-                console.warn("Error setting RATGDO state");
+                console.warn("Error setting GRGDO1 state");
                 return false;
             }
             else {
@@ -753,7 +753,7 @@ async function changePassword() {
     }
     let www_username = document.getElementById("newUserName").value.substring(0, 30);
     if (www_username.length == 0) www_username = serverStatus.userName ?? "admin";
-    const www_realm = "RATGDO Login Required";
+    const www_realm = "GRGDO1 Login Required";
     // MD5() function expects a Uint8Array typed ArrayBuffer...
     const passwordHash = MD5((new TextEncoder).encode(www_username + ":" + www_realm + ":" + newPW.value));
     console.log("Set new credentials to: " + passwordHash);
@@ -869,7 +869,7 @@ async function saveSettings() {
         "syslogPort", syslogPort
     );
     if (reboot) {
-        countdown(rebootSeconds, "Settings saved, RATGDO device rebooting...&nbsp;");
+        countdown(rebootSeconds, "Settings saved, GRGDO1 device rebooting...&nbsp;");
     }
     else {
         // No need to reboot, but return to main page to reload status.
@@ -881,7 +881,7 @@ async function saveSettings() {
 async function resetDoor() {
     if (confirm('Reset door rolling codes and presence of motion sensor. Settings will not change but device will reboot, are you sure?')) {
         await setGDO("resetDoor", true);
-        countdown(rebootSeconds, "Door reset, RATGDO device rebooting...&nbsp;");
+        countdown(rebootSeconds, "Door reset, GRGDO1 device rebooting...&nbsp;");
     }
     return;
 }
@@ -895,12 +895,12 @@ async function setSSID() {
 }
 
 async function bootSoftAP() {
-    if (confirm('This will reboot RATGDO device into Soft Access Point mode from where you can '
+    if (confirm('This will reboot GRGDO1 device into Soft Access Point mode from where you can '
         + 'select a WiFi network SSID.\n\nYou must connect your laptop or mobile device to '
         + 'WiFi Network: "' + document.getElementById("deviceName").innerHTML.replace(/\s/g, '-') + '" and then connect your browser to IP address: '
         + '192.168.4.1\n\nAre you sure?')) {
         await setGDO("softAPmode", true);
-        countdown(rebootSeconds, "RATGDO device rebooting...&nbsp;");
+        countdown(rebootSeconds, "GRGDO1 device rebooting...&nbsp;");
     }
     return;
 }
@@ -910,7 +910,7 @@ async function factoryReset() {
         + 'You must delete the accessory from Apple Home and re-pair the device.\n\nYou will LOSE ALL AUTOMATIONS associated with this device\n\nAre you sure?')) {
         if (confirm('ARE YOU REALLY SURE?')) {
             await setGDO("factoryReset", true);
-            countdown(rebootSeconds, "RATGDO device rebooting...&nbsp;");
+            countdown(rebootSeconds, "GRGDO1 device rebooting...&nbsp;");
         }
     }
     return;

@@ -237,9 +237,9 @@ void setup_homekit()
     // Define the Garage Door accessory...
     new SpanAccessory();
     new DEV_Info(device_name);
-    new Characteristic::Manufacturer("Ratcloud llc");
+    new Characteristic::Manufacturer("Gelidus Research");
     new Characteristic::SerialNumber(Network.macAddress().c_str());
-    new Characteristic::Model("ratgdo-ESP32");
+    new Characteristic::Model("GRGDO1");
     new Characteristic::FirmwareRevision(AUTO_VERSION);
     door = new DEV_GarageDoor();
 
@@ -397,25 +397,31 @@ void notify_homekit_obstruction()
 DEV_GarageDoor::DEV_GarageDoor() : Service::GarageDoorOpener()
 {
     RINFO(TAG, "Configuring HomeKit Garage Door Service");
+
+    // Create event queue for door events
     event_q = xQueueCreate(5, sizeof(GDOEvent));
-    current = new Characteristic::CurrentDoorState(current->CLOSED);
-    target = new Characteristic::TargetDoorState(target->CLOSED);
-    obstruction = new Characteristic::ObstructionDetected(obstruction->NOT_DETECTED);
+
+    // Initialize characteristics
+    current = new Characteristic::CurrentDoorState(Characteristic::CurrentDoorState::CLOSED);
+    target = new Characteristic::TargetDoorState(Characteristic::TargetDoorState::CLOSED);
+    obstruction = new Characteristic::ObstructionDetected(Characteristic::ObstructionDetected::NOT_DETECTED);
+
+    // Initialize lock-related characteristics if security type is not 3
     if (userConfig->getGDOSecurityType() != 3)
     {
-        // Dry contact cannot control lock ?
-        lockCurrent = new Characteristic::LockCurrentState(lockCurrent->UNKNOWN);
-        lockTarget = new Characteristic::LockTargetState(lockTarget->UNLOCK);
+        lockCurrent = new Characteristic::LockCurrentState(Characteristic::LockCurrentState::UNKNOWN);
+        lockTarget = new Characteristic::LockTargetState(Characteristic::LockTargetState::UNLOCK);
     }
     else
     {
         lockCurrent = nullptr;
         lockTarget = nullptr;
     }
-    // We can set current lock state to unknown as HomeKit has value for that.
-    // But we can't do the same for door state as HomeKit has no value for that.
+
+    // Initialize the garage door's current lock state
     garage_door.current_lock = CURR_UNKNOWN;
 }
+
 
 boolean DEV_GarageDoor::update()
 {
