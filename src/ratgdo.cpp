@@ -4,7 +4,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -41,14 +41,14 @@ GarageDoor garage_door;
 // Track our memory usage
 uint32_t free_heap = (1024 * 1024);
 uint32_t min_heap = (1024 * 1024);
-unsigned long next_heap_check = 0;
+uint64_t next_heap_check = 0;
 
 bool status_done = false;
-unsigned long status_timeout;
+uint64_t status_timeout;
 
 // support for changeing WiFi settings
 #define WIFI_CONNECT_TIMEOUT (30 * 1000)
-static unsigned long wifiConnectTimeout = 0;
+static uint64_t wifiConnectTimeout = 0;
 static bool ping_failure = false;
 static bool ping_timed_out = false;
 ;
@@ -67,25 +67,29 @@ void setup()
         ; // Wait for serial port to open
 
     Serial.printf("\n\n\n=== R A T G D O ===\n");
-
-    if (esp_core_dump_image_check() == ESP_OK)
-    {
-        crashCount = 1;
-        Serial.printf("CORE DUMP FOUND\n");
-        esp_core_dump_summary_t *summary = (esp_core_dump_summary_t *)malloc(sizeof(esp_core_dump_summary_t));
-        if (summary)
-        {
-            if (esp_core_dump_get_summary(summary) == ESP_OK)
-            {
-                Serial.printf("Crash in task: %s\n", summary->exc_task);
-            }
-        }
-        free(summary);
-    }
-
     // Beep on boot...
     tone(BEEPER_PIN, 1300, 500);
     led.on();
+
+    esp_reset_reason_t r = esp_reset_reason();
+    switch (r)
+    {
+    case ESP_RST_POWERON:
+    case ESP_RST_PWR_GLITCH:
+        RINFO(TAG, "System restart after power-on or power glitch: %d", r);
+        // RTC memory does not survive power interruption. Initialize values.
+        rebootTime = 0;
+        crashTime = 0;
+        crashCount = 0;
+        break;
+    default:
+        RINFO(TAG, "System restart reason: %d", r);
+        break;
+    }
+
+    // If there is a core dump image but no saved crash log, then set count to -1.
+    if ((crashCount == 0) && (esp_core_dump_image_check() == ESP_OK))
+        crashCount = -1;
 
     load_all_config_settings();
 
@@ -97,7 +101,7 @@ void setup()
 
     if (userConfig->getWifiChanged())
     {
-        wifiConnectTimeout = millis() + WIFI_CONNECT_TIMEOUT;
+        wifiConnectTimeout = millis64() + WIFI_CONNECT_TIMEOUT;
     }
 
     setup_homekit();
@@ -186,7 +190,7 @@ static void ping_stop()
  */
 void service_timer_loop()
 {
-    unsigned long current_millis = millis();
+    uint64_t current_millis = millis64();
 
     if ((rebootSeconds != 0) && (rebootSeconds < current_millis / 1000))
     {
@@ -196,14 +200,18 @@ void service_timer_loop()
         return;
     }
 
-#ifdef NTP_CLIENT
     if (enableNTP && clockSet && lastRebootAt == 0)
     {
         lastRebootAt = time(NULL) - (current_millis / 1000);
         RINFO(TAG, "Current System time: %s", timeString());
         RINFO(TAG, "System boot time:    %s", timeString(lastRebootAt));
+        // Need to also set when last door open/close was
+        if (userConfig->getDoorUpdateAt() != 0)
+        {
+            lastDoorUpdateAt = (((uint64_t)userConfig->getDoorUpdateAt() - time(NULL)) * 1000LL) + current_millis;
+            RINFO(TAG, "Last door update at: %s", timeString((uint64_t)userConfig->getDoorUpdateAt()));
+        }
     }
-#endif
 
     // Check heap
     if (current_millis > next_heap_check)
@@ -227,7 +235,7 @@ void service_timer_loop()
             userConfig->set(cfg_wifiPhyMode, 0);
             // TODO support WiFi TX Power & PhyMode... set changes immediately here
             // Now try and reconnect...
-            wifiConnectTimeout = millis() + WIFI_CONNECT_TIMEOUT;
+            wifiConnectTimeout = millis64() + WIFI_CONNECT_TIMEOUT;
             WiFi.reconnect();
         }
         else
@@ -256,7 +264,7 @@ void service_timer_loop()
             ip.fromString("0.0.0.0");
             WiFi.config(ip, ip, ip, ip);
             // Now try and reconnect...
-            wifiConnectTimeout = millis() + WIFI_CONNECT_TIMEOUT;
+            wifiConnectTimeout = millis64() + WIFI_CONNECT_TIMEOUT;
             WiFi.reconnect();
         }
     }

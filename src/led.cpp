@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -17,7 +17,7 @@
 #include "led.h"
 
 // Logger tag
-static const char *TAG = "ratgdo-led";
+// static const char *TAG = "ratgdo-led";
 
 // Construct the singleton object for LED access
 LED led(LED_BUILTIN);
@@ -68,7 +68,7 @@ void LED::setIdleState(uint8_t state)
     }
     else
     {
-        idleState = state;
+        idleState = state ? onState : offState;
         // active state is opposite of idle state which can be zero or one.
         activeState = (idleState == 1) ? 0 : 1;
     }

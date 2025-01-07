@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -24,18 +24,12 @@
 // #include "homekit_decl.h"
 // #include "ratgdo.h"
 
-#ifdef NTP_CLIENT
 extern bool clockSet;
-extern unsigned long lastRebootAt;
+extern uint64_t lastRebootAt;
 extern char *timeString(time_t reqTime = 0, bool syslog = false);
 extern bool enableNTP;
 extern bool get_auto_timezone();
 #define NTP_SERVER "pool.ntp.org"
-#endif
-
-#ifndef ARDUINO
-#define millis() (esp_timer_get_time() / 1000UL)
-#endif
 
 #if defined(MMU_IRAM_HEAP)
 // IRAM heap is used only for allocating globals, to leave as much regular heap
@@ -84,6 +78,7 @@ typedef union
 extern motionTriggersUnion motionTriggers;
 
 // Function declarations
+uint64_t millis64();
 extern void load_all_config_settings();
 extern void sync_and_restart();
 extern char *make_rfc952(char *dest, const char *src, int size);

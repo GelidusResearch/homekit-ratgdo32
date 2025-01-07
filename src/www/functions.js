@@ -1,7 +1,7 @@
 /***********************************************************************
  * homekit-ratgdo web page javascript functions
  *
- * Copyright (c) 2023-24 David Kerr, https://github.com/dkerr64
+ * Copyright (c) 2023-25 David Kerr, https://github.com/dkerr64
  *
  */
 
@@ -127,6 +127,13 @@ function toggleSyslog() {
     }
 }
 
+// enable laser
+function enableLaser(value) {
+    document.getElementById('laserHomeKit').disabled = !value;
+    document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
+    document.getElementById("parkAssist").style.display = (value) ? "table-row" : "none";
+}
+
 // Show or hide the static IP fields
 function toggleStaticIP() {
     document.getElementById("staticIPtable").style.display = (this.event.target.checked) ? "table" : "none";
@@ -212,18 +219,31 @@ function setElementsFromStatus(status) {
                 document.getElementById("rebootHours").value = value / 60 / 60;
                 break;
             case "TTCseconds":
-                document.getElementById(key).value = value;
+                document.getElementById(key).value = (value <= 10) ? value : (value - 10) / 5 + 10;
                 document.getElementById("TTCsecondsValue").innerHTML = value;
                 break;
             case "distanceSensor":
                 document.getElementById("vehicleRow").style.display = (value) ? "table-row" : "none";
                 document.getElementById("vehicleSetting").style.display = (value) ? "table-row" : "none";
-                document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
+                document.getElementById("laserSetting").style.display = (value) ? "table-row" : "none";
                 break;
             case "vehicleThreshold":
                 document.getElementById(key).value = value;
                 document.getElementById("vehicleThresholdCM").innerHTML = value;
                 document.getElementById("vehicleThresholdInch").innerHTML = Math.round(value / .254) / 10;
+                break;
+            case "laserEnabled":
+                document.getElementById(key).checked = value;
+                document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
+                document.getElementById("laserHomeKit").disabled = !value;
+                document.getElementById("parkAssist").style.display = (value) ? "table-row" : "none";
+                break;
+            case "laserHomeKit":
+                document.getElementById(key).checked = value;
+                break;
+            case "assistDuration":
+                document.getElementById(key).value = value;
+                document.getElementById("assistValue").innerHTML = value;
                 break;
             case "firmwareVersion":
                 document.getElementById(key).innerHTML = value;
@@ -695,8 +715,8 @@ async function setGDO(...args) {
             if (serverStatus[args[i]] != args[i + 1]) {
                 console.log(`Set: ${args[i]} to: ${args[i + 1]}`);
                 formData.append(args[i], args[i + 1]);
-                // Update local copy with what we are sending to ratgdo.
-                serverStatus[args[i]] = args[i + 1];
+                // Local copy of server status will be updated when server later reports status.
+                // serverStatus[args[i]] = args[i + 1];
             }
         }
         if (Array.from(formData.keys()).length > 0) {
@@ -811,11 +831,17 @@ async function saveSettings() {
                 : '0';
     const wifiPower = Math.max(Math.min(parseInt(document.getElementById("wifiPower").value), 20), 0);
     */
-    let TTCseconds = Math.max(Math.min(parseInt(document.getElementById("TTCseconds").value), 60), 0);
+    let TTCseconds = Math.max(parseInt(document.getElementById("TTCseconds").value), 0);
     if (isNaN(TTCseconds)) TTCseconds = 0;
+    TTCseconds = (TTCseconds <= 10) ? TTCseconds : ((TTCseconds - 10) * 5) + 10;
 
     let vehicleThreshold = Math.max(Math.min(parseInt(document.getElementById("vehicleThreshold").value), 200), 5);
     if (isNaN(vehicleThreshold)) vehicleThreshold = 0;
+    const laserEnabled = (document.getElementById("laserEnabled").checked) ? '1' : '0';
+    const laserHomeKit = (document.getElementById("laserHomeKit").checked) ? '1' : '0';
+
+    let assistDuration = Math.max(Math.min(parseInt(document.getElementById("assistDuration").value), 300), 0);
+    if (isNaN(assistDuration)) assistDuration = 0;
 
     const syslogEn = (document.getElementById("syslogEn").checked) ? '1' : '0';
     let syslogIP = document.getElementById("syslogIP").value.substring(0, 15);
@@ -855,6 +881,9 @@ async function saveSettings() {
         */
         "TTCseconds", TTCseconds,
         "vehicleThreshold", vehicleThreshold,
+        "laserEnabled", laserEnabled,
+        "laserHomeKit", laserHomeKit,
+        "assistDuration", assistDuration,
         "motionTriggers", motionTriggers,
         "LEDidle", LEDidle,
         "staticIP", staticIP,

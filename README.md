@@ -4,8 +4,9 @@
 > **THIS IS EARLY FIRMWARE still under test from the upstream.
 > Future updates MAY include breaking changes requiring a flash erase and re-upload.**
 >
+> Firmware for the new DISCO device is under development. The following features, documented in this README, are not currently available in this version
+> and may never be implemented
 >
-> * Crashlog display and download.
 > * Locking WiFi to specific WiFi access point.
 > * Setting WiFi protocol version.
 > * Setting WiFi transmit power.
@@ -67,7 +68,7 @@ When you first add the device to HomeKit a number of accessories are added:
 * Vehicle presence _occupancy_ sensor. Only on ratgdo32-disco boards, set if the distance sensor detects presence of a vehicle.
 
 Vehicle arrival and departing sensors are only triggered if vehicle motion is detected within 5 minutes of door opening or closing. The parking assist
-laser is activated for one minute when vehicle arrival is detected.
+laser is activated when vehicle arrival is detected.
 
 See below for instructions on setting the distance threshold for triggering vehicle presence.
 
@@ -159,6 +160,19 @@ Ratgdo32-disco boards detect vehicle arrival, departure and presence based on di
 reported in vehicle distance when there is no vehicle present (the approximate distance to the floor) and when the vehicle is parked (the approximate
 distance to the vehicle roof or hood).  Set the vehicle distance slider to between these these two values.  Measured distance can fluctuate so allow
 for this when setting the value.
+
+> [!IMPORTANT]
+> Take care when installing the ratgdo32-disco board that the sensor is not pointing at glass (e.g. your vehicle windshield). You may need tilt the board
+> to point towards the vehicle roof.  If you get unreliable results, you should also remove the yellow sticker that may be on the sensor to protect
+> it from dust during manufacture and shipping.
+
+### Laser
+
+If you have the parking assist laser accessory installed, select this option to enable support and optionally add HomeKit light switch accessory
+to allow for manual or HomeKit automation control.
+
+When enabled, you can configure how long the laser remains on during parking assist by selecting a value from zero to 300 seconds (5 minutes). Selecting
+zero disables parking assist laser.  Parking assist is triggered if an arriving vehicle is detected with 5 minutes of the door opening or closing.
 
 ### Door Protocol
 
@@ -261,7 +275,7 @@ If the OTA firmware update fails the following message will be displayed and you
 
 ### Esptool
 
-[Espressif](https://www.espressif.com) publishes [esptool](https://docs.espressif.com/projects/esptool/en/latest/esp8266/index.html), a command line utility built with python.  Esptool requires that you connect a USB serial cable to the ratgdo device.
+[Espressif](https://www.espressif.com) publishes [esptool](https://docs.espressif.com/projects/esptool/en/latest/esp32/index.html), a command line utility built with python.  Esptool requires that you connect a USB serial cable to the ratgdo device.
 
 > [!NOTE]
 > The ratgdo32 firmware comprises multiple files. It is strongly recommended to use the [online browser-based flash tool](https://ratgdo.github.io/homekit-ratgdo32/flash.html) described above rather than use this command directly
@@ -298,7 +312,7 @@ Resets and reboots the device. This will delete HomeKit pairing.
 ```
 curl -s http://<ip-address>/crashlog
 ```
-Returns details of the last crash including stack trace and the message log leading up to the crash. __Not currently implemented on ratgdo32 boards.__
+Returns details of the last crash including stack trace and the message log leading up to the crash.
 
 ### Clear crash log
 
@@ -395,7 +409,7 @@ has already found a fix.
 
 Great reliability improvements have been made in recent versions of the firmware, but it is possible that things can still go wrong. As noted above you should check that the door protocol is correctly set and if WiFi connection stability is suspected then you select a specific WiFi version.
 
-The footer of the webpage displays useful information that can help project contributors assist with diagnosing a problem. The ESP8266 is a low-memory device so monitoring actual memory usage is first place to start. Whenever you connect to the webpage, the firmware reports memory utilization every second... current available free heap, the lowest value that free heap has reached since last reboot, and the minimum available stack reached since last reboot.
+The footer of the webpage displays useful information that can help project contributors assist with diagnosing a problem. The ratgdo is a low-memory device so monitoring actual memory usage is first place to start. Whenever you connect to the webpage, the firmware reports memory utilization... current available free heap, the lowest value that free heap has reached since last reboot.
 
 In addition the last reboot date and time is reported (calculated by subtracting up-time from current time).
 
@@ -404,6 +418,10 @@ The _lastDoorChange_ will show the date and time that the door was last opened o
 ### Show system logs
 
 Clicking on the system logs link will open a new browser tab with details of current and saved logs.  On this page you can select to view the current system log, the current system status in raw JSON format, the system log immediately before the last user requested reboot or reset, and the system log immediately before the last crash. If you open an issue on GitHub then please copy/paste the full crash log into the issue.
+
+> [!NOTE]
+> Logs from the last reboot and crash are saved in volatile memory and do not survive a power interruption or a firmware flash.
+> If you need to retain these logs to report an issue please make a copy before disconnecting the power or updating firmware.
 
 ## How can I contribute?
 
@@ -429,4 +447,4 @@ this firmware would never have been necessary.
 
 [Garage icons](https://www.flaticon.com/free-icons/garage) created by Creative Squad - Flaticon
 
-Copyright (c) 2023-24 HomeKit-ratgdo32 [contributors](https://github.com/ratgdo/homekit-ratgdo32/graphs/contributors).
+Copyright (c) 2023-25 HomeKit-ratgdo32 [contributors](https://github.com/ratgdo/homekit-ratgdo32/graphs/contributors).

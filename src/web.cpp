@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -40,6 +40,7 @@
 #include "json.h"
 #include "led.h"
 #include "vehicle.h"
+#include "www/build/webcontent.h"
 
 // Logger tag
 static const char *TAG = "ratgdo-http";
@@ -47,15 +48,6 @@ static const char *TAG = "ratgdo-http";
 // Browser cache control, time in seconds after which browser cache invalid
 // This is used for CSS, JS and IMAGE file types.  Set to 30 days !!
 #define CACHE_CONTROL (60 * 60 * 24 * 30)
-
-#ifdef ENABLE_CRASH_LOG
-#include "EspSaveCrash.h"
-#ifdef LOG_MSG_BUFFER
-EspSaveCrash saveCrash(1408, 1024, true, &crashCallback);
-#else
-EspSaveCrash saveCrash(1408, 1024, true);
-#endif
-#endif
 
 // Forward declare the internal URI handling functions...
 void handle_reset();
@@ -108,11 +100,9 @@ WebServer server(80);
 GarageDoor last_reported_garage_door;
 bool last_reported_paired = false;
 bool last_reported_assist_laser = false;
-uint32_t lastDoorUpdateAt = 0;
+uint64_t lastDoorUpdateAt = 0;
 GarageDoorCurrentState lastDoorState = (GarageDoorCurrentState)0xff;
 
-// number of times the device has crashed
-int crashCount = 0;
 static bool web_setup_done = false;
 
 // Implement our own firmware update so can enforce MD5 check.
@@ -152,7 +142,7 @@ uint8_t subscriptionCount = 0;
 
 SemaphoreHandle_t jsonMutex = NULL;
 
-#define JSON_BUFFER_SIZE 1280
+#define JSON_BUFFER_SIZE 2048
 char *json = NULL;
 
 #define DOOR_STATE(s) (s == 0) ? "Open" : (s == 1) ? "Closed"  \
@@ -169,7 +159,7 @@ void web_loop()
     if (!web_setup_done)
         return;
 
-    unsigned long upTime = millis();
+    uint64_t upTime = millis64();
     xSemaphoreTake(jsonMutex, portMAX_DELAY);
     START_JSON(json);
     if (garage_door.active && garage_door.current_state != lastDoorState)
@@ -333,7 +323,8 @@ void handle_reset()
 
 void handle_reboot()
 {
-    RINFO(TAG, "... reboot requested");
+    RINFO(TAG, "System boot time:    %s", timeString(lastRebootAt));
+    RINFO(TAG, "Reboot requested at: %s", timeString());
     const char *resp = "Rebooting...\n";
     server.client().setNoDelay(true);
     server.send(200, type_txt, resp);
@@ -349,14 +340,14 @@ void load_page(const char *page)
     if (webcontent.count(page) == 0)
         return handle_notfound();
 
-    const char *data = (char *)std::get<0>(webcontent.at(page));
-    int length = std::get<1>(webcontent.at(page));
-    const char *typeP = std::get<2>(webcontent.at(page));
+    const char *data = (char *)webcontent.at(page).data;
+    int length =  webcontent.at(page).length;
+    const char *typeP = webcontent.at(page).type;
+    const char *crc32 = webcontent.at(page).crc32.c_str();
     // need local copy as strcmp_P cannot take two PSTR()'s
     char type[MAX_MIME_TYPE_LEN];
     strncpy_P(type, typeP, MAX_MIME_TYPE_LEN);
-    // Following for browser cache control...
-    const char *crc32 = std::get<3>(webcontent.at(page)).c_str();
+
     bool cache = false;
     char cacheHdr[24] = "no-cache, no-store";
     char matchHdr[8] = "";
@@ -435,7 +426,7 @@ void handle_everything()
 
 void handle_status()
 {
-    unsigned long upTime = millis();
+    uint64_t upTime = millis64();
 #define clientCount 0
     // Build the JSON string
     xSemaphoreTake(jsonMutex, portMAX_DELAY);
@@ -468,7 +459,7 @@ void handle_status()
     ADD_INT(json, "freeHeap", free_heap);
     ADD_INT(json, "minHeap", min_heap);
     // TODO monitor stack... ADD_INT(json, "minStack", 0);
-    ADD_INT(json, "crashCount", crashCount);
+    ADD_INT(json, "crashCount", abs(crashCount));
     // TODO support WiFi PhyMode... ADD_INT(json, cfg_wifiPhyMode, userConfig->getWifiPhyMode());
     // TODO support WiFi TX Power... ADD_INT(json, cfg_wifiPower, userConfig->getWifiPower());
     ADD_BOOL(json, cfg_staticIP, userConfig->getStaticIP());
@@ -478,7 +469,7 @@ void handle_status()
     ADD_INT(json, cfg_TTCseconds, userConfig->getTTCseconds());
     ADD_INT(json, cfg_vehicleThreshold, userConfig->getVehicleThreshold());
     ADD_INT(json, cfg_motionTriggers, motionTriggers.asInt);
-    ADD_INT(json, cfg_LEDidle, led.getIdleState());
+    ADD_INT(json, cfg_LEDidle, userConfig->getLEDidle());
     // We send milliseconds relative to current time... ie updated X milliseconds ago
     ADD_INT(json, "lastDoorUpdateAt", (upTime - lastDoorUpdateAt));
     ADD_BOOL(json, "enableNTP", enableNTP);
@@ -498,6 +489,9 @@ void handle_status()
         last_reported_assist_laser = laser.state();
         ADD_BOOL(json, "assistLaser", last_reported_assist_laser);
     }
+    ADD_BOOL(json, cfg_laserEnabled, userConfig->getLaserEnabled());
+    ADD_BOOL(json, cfg_laserHomeKit, userConfig->getLaserHomeKit());
+    ADD_INT(json, cfg_assistDuration, userConfig->getAssistDuration());
     END_JSON(json);
 
     // send JSON straight to serial port
@@ -767,10 +761,9 @@ void SSEheartbeat(SSESubscription *s)
     {
         static int8_t lastRSSI = 0;
         static int16_t lastVehicleDistance = 0;
-        static int lastClientCount = 0;
         xSemaphoreTake(jsonMutex, portMAX_DELAY);
         START_JSON(json);
-        ADD_INT(json, "upTime", millis());
+        ADD_INT(json, "upTime", millis64());
         ADD_INT(json, "freeHeap", free_heap);
         ADD_INT(json, "minHeap", min_heap);
         // TODO monitor stack... ADD_INT(json, "minStack", ESP.getFreeContStack());
@@ -785,6 +778,7 @@ void SSEheartbeat(SSESubscription *s)
             ADD_STR(json, "wifiRSSI", (std::to_string(lastRSSI) + " dBm, Channel " + std::to_string(WiFi.channel())).c_str());
         }
         /* TODO monitor number of "clients" connected to HomeKit
+        static int lastClientCount = 0;
         if (arduino_homekit_get_running_server() && arduino_homekit_get_running_server()->nfds != lastClientCount)
         {
             lastClientCount = arduino_homekit_get_running_server()->nfds;
@@ -919,13 +913,7 @@ void handle_crashlog()
     RINFO(TAG, "Request to display crash log...");
     WiFiClient client = server.client();
     client.print(response200);
-    /* TODO show crashdump
-        saveCrash.print(client);
-    #ifdef LOG_MSG_BUFFER
-        if (crashCount > 0)
-            printSavedLog(client);
-    #endif
-    */
+    ratgdoLogger->printCrashLog(client);
     client.stop();
 }
 
@@ -933,10 +921,7 @@ void handle_showlog()
 {
     WiFiClient client = server.client();
     client.print(response200);
-#ifdef LOG_MSG_BUFFER
     ratgdoLogger->printMessageLog(client);
-    // ratgdoLogger->saveMessageLog();
-#endif
     client.stop();
 }
 
@@ -944,9 +929,7 @@ void handle_showrebootlog()
 {
     WiFiClient client = server.client();
     client.print(response200);
-#ifdef LOG_MSG_BUFFER
     ratgdoLogger->printSavedLog(client);
-#endif
     client.stop();
 }
 
@@ -967,6 +950,7 @@ void handle_crash_oom()
     delay(1000);
     for (int i = 0; i < 30; i++)
     {
+        RINFO(TAG, "malloc(1024)");
         crashptr = malloc(1024);
     }
 }
@@ -978,7 +962,7 @@ void handle_forcecrash()
     delay(1000);
     RINFO(TAG, "Result: %s", test_str);
 }
-#endif
+#endif // CRASH_DEBUG
 
 void SSEBroadcastState(const char *data, BroadcastType type)
 {

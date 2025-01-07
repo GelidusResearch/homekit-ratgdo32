@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -111,6 +111,7 @@ bool helperLEDidle(const std::string &key, const std::string &value, configSetti
     // call fn to set LED object
     userConfig->set(key, value);
     led.setIdleState(userConfig->getLEDidle());
+    led.idle();
     return true;
 }
 
@@ -167,6 +168,13 @@ bool helperVehicleThreshold(const std::string &key, const std::string &value, co
     return true;
 }
 
+bool helperLaser(const std::string &key, const std::string &value, configSetting *action)
+{
+    userConfig->set(key, value);
+    enable_service_homekit_laser(userConfig->getLaserEnabled() && userConfig->getLaserHomeKit());
+    return true;
+}
+
 /****************************************************************************
  * User settings class
  */
@@ -183,8 +191,8 @@ userSettings::userSettings()
     settings = {
         {cfg_deviceName, {false, false, default_device_name, setDeviceName}}, // call fn to set global
         {cfg_wifiChanged, {true, true, false, NULL}},
-        {cfg_wifiPower, {true, true, WIFI_POWER_MAX, helperWiFiPower}},    // call fn to set reboot only if setting changed
-        {cfg_wifiPhyMode, {true, true, 0, helperWiFiPhyMode}}, // call fn to set reboot only if setting changed
+        {cfg_wifiPower, {true, true, WIFI_POWER_MAX, helperWiFiPower}}, // call fn to set reboot only if setting changed
+        {cfg_wifiPhyMode, {true, true, 0, helperWiFiPhyMode}},          // call fn to set reboot only if setting changed
         {cfg_staticIP, {true, true, false, NULL}},
         {cfg_localIP, {true, true, "0.0.0.0", NULL}},
         {cfg_subnetMask, {true, true, "0.0.0.0", NULL}},
@@ -210,6 +218,9 @@ userSettings::userSettings()
         {cfg_syslogIP, {false, false, "0.0.0.0", NULL}},
         {cfg_syslogPort, {false, false, 514, NULL}},
         {cfg_vehicleThreshold, {false, false, 100, helperVehicleThreshold}}, // call fn to set globals
+        {cfg_laserEnabled, {false, false, false, helperLaser}},
+        {cfg_laserHomeKit, {false, false, true, helperLaser}},
+        {cfg_assistDuration, {false, false, 60, NULL}},
     };
 }
 
@@ -412,9 +423,15 @@ nvRamClass::nvRamClass()
 void nvRamClass::checkStats()
 {
     nvs_stats_t nvs_stats;
-    esp_err_t err = nvs_get_stats(NULL, &nvs_stats);
-    RINFO(TAG, "NVRAM Stats... UsedEntries = (%lu), FreeEntries = (%lu), TotalEntries = (%lu), Count = (%lu)\n",
-          nvs_stats.used_entries, nvs_stats.free_entries, nvs_stats.total_entries, nvs_stats.namespace_count);
+    if (esp_err_t err = nvs_get_stats(NULL, &nvs_stats) == ESP_OK)
+    {
+        RINFO(TAG, "NVRAM Stats... UsedEntries = (%lu), FreeEntries = (%lu), TotalEntries = (%lu), Count = (%lu)\n",
+              nvs_stats.used_entries, nvs_stats.free_entries, nvs_stats.total_entries, nvs_stats.namespace_count);
+    }
+    else
+    {
+        RERROR(TAG, "Error return from nvs_get_stats: %d", err);
+    }
 }
 
 int32_t nvRamClass::read(const std::string &constKey, const int32_t dflt)

@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -94,7 +94,7 @@ struct GarageDoor
     bool obstructed;
     bool has_motion_sensor;
     bool has_distance_sensor;
-    unsigned long motion_timer;
+    uint64_t motion_timer;
     bool motion;
     bool light;
     LockCurrentState current_lock;
@@ -106,5 +106,5 @@ extern GarageDoor garage_door;
 struct ForceRecover
 {
     uint8_t push_count;
-    unsigned long timeout;
+    uint64_t timeout;
 };

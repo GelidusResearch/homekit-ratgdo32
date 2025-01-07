@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-  <!--  Copyright (c) 2023-24 David Kerr, https://github.com/dkerr64 -->
+  <!--  Copyright (c) 2023-25 David Kerr, https://github.com/dkerr64 -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=1">
   <meta name="apple-mobile-web-app-title" content="RATDGO">
@@ -37,7 +37,7 @@
         <div style="float:right;vertical-align: middle; padding-left: 0; padding-right: 0; cursor: pointer;">
           <img id="settings-icon" src="settings-sliders.svg?v=CRC-32" alt="Settings" style="width:1.5em;height:1.5em;">
           <img id="main-icon" src="garage-car.svg?v=CRC-32" alt="Homepage" onclick="history.back()"
-            style="display:none; width:1.5em;height:1.5em;">
+            style="display:none; width:1.5em; height:1.5em;">
         </div>
       </div>
       <!-- Main section of page ------------------------------------------------------------------>
@@ -103,14 +103,10 @@
             must first un-pair from existing home.
           </p>
         </div>
-        <div class="fullwidth" style="padding: 0px;">
-          <div class="serverstatus" style="padding: 0px; padding-bottom: 5px; display: flex; justify-content: space-evenly;">
-            <input type="button" value="Reboot RATGDO" onclick="rebootRATGDO(true)">
-            <input type="button" value="Firmware Update" onclick="showUpdateDialog()">
-          </div>
-          <div class="qrcode center">
-            <input type="button" id="unpair" value="Reset HomeKit" onclick="unpairRATGDO()">
-          </div>
+        <div class="fullwidth" style="padding: 0px; padding-bottom: 5px; display: flex; justify-content: space-evenly;">
+          <input type="button" value="Reboot RATGDO" onclick="rebootRATGDO(true)">
+          <input type="button" value="Firmware Update" onclick="showUpdateDialog()">
+          <input type="button" id="unpair" value="Reset HomeKit" onclick="unpairRATGDO()">
         </div>
         <div class="fullwidth">
           <table style="width: 95%">
@@ -192,7 +188,7 @@
             <table class="settings">
               <tr>
                 <td style="font-size: 0.65em;"><u>No reboot required:</u></td>
-                <td></td>
+                <td style="width: 70%;"></td>
               </tr>
               <tr>
                 <td class="label">Name:</td>
@@ -203,7 +199,7 @@
               <tr>
                 <td class="label">Door Close Delay:</td>
                 <td>&nbsp;
-                  <input type="range" min="0" max="60" value="0" id="TTCseconds" name="TTCseconds" class="slider"
+                  <input type="range" min="0" max="20" value="0" id="TTCseconds" name="TTCseconds" class="slider"
                     style="width:150px;">
                   <span style="vertical-align: middle; font-size: 0.8em"><span
                       id="TTCsecondsValue"></span>&nbsp;Seconds</span>
@@ -270,11 +266,37 @@
               <tr id="vehicleSetting" style="display:none;">
                 <td class="label">Vehicle Distance:</td>
                 <td>&nbsp;
-                  <input type="range" min="5" max="300" value="180" id="vehicleThreshold" name="vehicleThreshold"
+                  <input type="range" min="5" max="300" value="180" step="5" id="vehicleThreshold" name="vehicleThreshold"
                     class="slider" style="width:150px;">
                   <span style="vertical-align: middle; font-size: 0.8em"><span
                       id="vehicleThresholdCM"></span>&nbsp;cm&nbsp;(<span
                       id="vehicleThresholdInch"></span>&nbsp;inch)</span>
+                </td>
+              </tr>
+              <tr id="laserSetting" style="display:none;">
+                <td class="label">Laser:</td>
+                <td>&nbsp;
+                  <input type="checkbox" id="laserEnabled" name="laserEnabled" value="no"
+                    onchange="enableLaser(this.checked)">
+                  <label for="laserEnabled">Enabled</label>
+                  <input type="checkbox" id="laserHomeKit" name="laserHomeKit" value="no" disabled>
+                  <label for="laserHomeKit">HomeKit Light Switch</label>
+                </td>
+              </tr>
+              <tr>
+                <td></td>
+                <td>
+                  <table class="settings" id="parkAssist" style="display: none;">
+                    <tr>
+                      <td class="label">Assist Duration:</td>
+                      <td>&nbsp;
+                        <input type="range" min="0" max="300" value="60" step="5" id="assistDuration" name="assistDuration"
+                          class="slider" style="width:100px;">
+                        <span style="vertical-align: middle;"><span
+                            id="assistValue"></span>&nbsp;Secs</span>
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
               <tr>
@@ -417,7 +439,7 @@
       <div class="footer">
         <p style="margin:0px;">For documentation and support see the <a
             href="https://github.com/gelidusresearch/homekit-ratgdo32">GitHub</a>
-          page.<br>Copyright (c) 2023-24 <a
+          page.<br>Copyright (c) 2023-25 <a
             href="https://github.com/gelidusresearch/homekit-ratgdo32/graphs/contributors">homekit-ratgdo
             contributors.</a><br>Licensed under terms of the <a
             href="https://www.gnu.org/licenses/gpl-3.0.en.html">GPL-3.0
@@ -611,9 +633,9 @@
     */
     TTCslider = document.getElementById("TTCseconds");
     TTCtext = document.getElementById("TTCsecondsValue");
-    TTCtext.innerHTML = TTCslider.value;
+    TTCtext.innerHTML = (TTCslider.value <= 10) ? TTCslider.value : ((TTCslider.value - 10) * 5) + 10;
     TTCslider.oninput = function () {
-      TTCtext.innerHTML = this.value;
+      TTCtext.innerHTML = (this.value <= 10) ? this.value : ((this.value - 10) * 5) + 10;
     };
 
     vDistSlider = document.getElementById("vehicleThreshold");
@@ -624,7 +646,14 @@
     vDistSlider.oninput = function () {
       vDistText1.innerHTML = this.value;
       vDistText2.innerHTML = Math.round(this.value / .254) / 10;
-    }
+    };
+
+    PAslider = document.getElementById("assistDuration");
+    PAtext = document.getElementById("assistValue");
+    PAtext.innerHTML = PAslider.value;
+    PAslider.oninput = function () {
+      PAtext.innerHTML = this.value;
+    };
   </script>
 </body>
 

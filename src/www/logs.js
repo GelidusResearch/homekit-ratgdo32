@@ -1,7 +1,7 @@
 /***********************************************************************
  * homekit-ratgdo logger web page javascript functions
  *
- * Copyright (c) 2024 David Kerr, https://github.com/dkerr64
+ * Copyright (c) 2024-25 David Kerr, https://github.com/dkerr64
  *
  */
 
@@ -84,7 +84,7 @@ function openTab(evt, tabName) {
     document.getElementById(tabName).style.display = "block";
     evt.currentTarget.className += " active";
     if (tabName === "crashTab") {
-        if (msgJson?.crashCount > 0) {
+        if (msgJson?.crashCount != 0) {
             document.getElementById("clearBtn").style.display = "inline-block";
         }
     } else if (tabName === "statusTab") {
