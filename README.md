@@ -7,6 +7,7 @@
 > Firmware for the new DISCO device is under development. The following features, documented in this README, are not currently available in this version
 > and may never be implemented
 >
+> * Crashlog display and download.
 > * Locking WiFi to specific WiFi access point.
 > * Setting WiFi protocol version.
 > * Setting WiFi transmit power.
@@ -68,7 +69,7 @@ When you first add the device to HomeKit a number of accessories are added:
 * Vehicle presence _occupancy_ sensor. Only on ratgdo32-disco boards, set if the distance sensor detects presence of a vehicle.
 
 Vehicle arrival and departing sensors are only triggered if vehicle motion is detected within 5 minutes of door opening or closing. The parking assist
-laser is activated when vehicle arrival is detected.
+laser is activated for one minute when vehicle arrival is detected.
 
 See below for instructions on setting the distance threshold for triggering vehicle presence.
 
@@ -162,7 +163,7 @@ distance to the vehicle roof or hood).  Set the vehicle distance slider to betwe
 for this when setting the value.
 
 > [!IMPORTANT]
-> Take care when installing the ratgdo32-disco board that the sensor is not pointing at glass (e.g. your vehicle windshield). You may need tilt the board
+> Take care when installing the GRGDO1 board that the sensor is not pointing at glass (e.g. your vehicle windshield). You may need tilt the board
 > to point towards the vehicle roof.  If you get unreliable results, you should also remove the yellow sticker that may be on the sensor to protect
 > it from dust during manufacture and shipping.
 
@@ -178,11 +179,11 @@ zero disables parking assist laser.  Parking assist is triggered if an arriving 
 
 Set the protocol for your model of garage door opener.  This defaults to Security+ 2.0 and you should only change this if necessary.  Note that the changing the door protocol also resets the door opener rolling codes and whether there is a motion sensor (this will be automatically detected after reset).
 
-### WiFi Version _(not supported on ratgdo32 boards)_
+### WiFi Version _(not supported on GRGDO1 boards)_
 
 If the device fails to connect reliably and consistently to your WiFi network it may help to lock it to a specific WiFi version. The ratgdo supports 802.11b, 802.11g and 802.11n on the 2.4GHz WiFi band and by default will auto-select. If it helps in your network, select the specific version you wish to use.
 
-### WiFi Tx Power _(not supported on ratgdo32 boards)_
+### WiFi Tx Power _(not supported on GRGDO1 boards)_
 
 You can set the WiFi transmit power to between 0 and 20 dBm. It defaults to the maximum (20.5 dBm, displayed as 20 dBm) but you may wish to fine tune this to control how the device connects to available WiFi access points.
 
@@ -409,8 +410,6 @@ has already found a fix.
 
 Great reliability improvements have been made in recent versions of the firmware, but it is possible that things can still go wrong. As noted above you should check that the door protocol is correctly set and if WiFi connection stability is suspected then you select a specific WiFi version.
 
-The footer of the webpage displays useful information that can help project contributors assist with diagnosing a problem. The ratgdo is a low-memory device so monitoring actual memory usage is first place to start. Whenever you connect to the webpage, the firmware reports memory utilization... current available free heap, the lowest value that free heap has reached since last reboot.
-
 In addition the last reboot date and time is reported (calculated by subtracting up-time from current time).
 
 The _lastDoorChange_ will show the date and time that the door was last opened or closed.
@@ -418,10 +417,6 @@ The _lastDoorChange_ will show the date and time that the door was last opened o
 ### Show system logs
 
 Clicking on the system logs link will open a new browser tab with details of current and saved logs.  On this page you can select to view the current system log, the current system status in raw JSON format, the system log immediately before the last user requested reboot or reset, and the system log immediately before the last crash. If you open an issue on GitHub then please copy/paste the full crash log into the issue.
-
-> [!NOTE]
-> Logs from the last reboot and crash are saved in volatile memory and do not survive a power interruption or a firmware flash.
-> If you need to retain these logs to report an issue please make a copy before disconnecting the power or updating firmware.
 
 ## How can I contribute?
 

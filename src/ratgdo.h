@@ -32,6 +32,8 @@
 #define SERIAL_NUMBER "14EVRY1"
 #define MODEL_NAME "GRGDO1"
 #define CHIP_FAMILY "ESP32"
+#define UART1_LOG 1
+
 
 /********************************** PIN DEFINITIONS *****************************************/
 
@@ -43,12 +45,17 @@ const gpio_num_t INPUT_OBST_PIN = GPIO_NUM_23;
 //const gpio_num_t STATUS_OBST_PIN = GPIO_NUM_11;       // output for obstruction status, HIGH for obstructed, LOW for clear
 const gpio_num_t DRY_CONTACT_OPEN_PIN = GPIO_NUM_18;  // dry contact for opening door
 const gpio_num_t DRY_CONTACT_CLOSE_PIN = GPIO_NUM_19; // dry contact for closing door
+const gpio_num_t TOF_SDA_PIN = GPIO_NUM_3;   // I2C SDA GRGDO1
+const gpio_num_t TOF_SCL_PIN = GPIO_NUM_1;   // I2C SCL GRGDO1
+//const gpio_num_t TOF_SDA_PIN = GPIO_NUM_18;   // I2C SDA RATGDO DISCO
+//const gpio_num_t TOF_SCL_PIN = GPIO_NUM_19;   // I2C SCL RATGDO DISCO
+
 
 const gpio_num_t BEEPER_PIN = GPIO_NUM_12;
 const gpio_num_t LASER_PIN = GPIO_NUM_13;
 //const gpio_num_t SENSOR_PIN = GPIO_NUM_14;
 
-const gpio_num_t SHUTDOWN_PIN = GPIO_NUM_15;
+const gpio_num_t SHUTDOWN_PIN = GPIO_NUM_33;
 
 extern uint32_t free_heap;
 extern uint32_t min_heap;

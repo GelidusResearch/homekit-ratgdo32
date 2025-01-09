@@ -31,7 +31,7 @@ bool vehicle_setup_done = false;
 VL53L4CX distanceSensor(&Wire, SHUTDOWN_PIN);
 
 static const int MIN_DISTANCE = 25;   // ignore bugs crawling on the distance sensor
-static const int MAX_DISTANCE = 3000; // 3 meters, maximum range of the sensor
+static const int MAX_DISTANCE = 4000; // 3 meters, maximum range of the sensor
 
 int16_t vehicleDistance = 0;
 int16_t vehicleThresholdDistance = 1000; // set by user
@@ -51,16 +51,27 @@ void calculatePresence(int16_t distance);
 void setup_vehicle()
 {
     VL53L4CX_Error rc = VL53L4CX_ERROR_NONE;
-    RINFO(TAG, "=== Setup VL53L4CX time-of-flight sensor ===");
-
-    Wire.begin(19, 18);
+    RINFO(TAG, "=== Setup VL53Lx time-of-flight sensor ===");
+    #ifdef UART1_LOG
+    Serial1.begin(115200); // Switch to Serial1 for debug output
+    Serial.end(); // Disable default serial pins
+    Serial = Serial1;
+    #endif
+    Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN);
     distanceSensor.begin();
     rc = distanceSensor.InitSensor(0x59);
     if (rc != VL53L4CX_ERROR_NONE)
     {
-        RERROR(TAG, "VL53L4CX failed to initialize error: %d", rc);
+        RERROR(TAG, "ToF Sensor failed to initialize error: %d", rc);
+        Wire.end(); // Disable I2C pins
+        #ifdef UART1_LOG
+        Serial1.end(); // Disable Serial1 pins
+        Serial0.begin(115200); // Re-enable default serial pins for improv
+        Serial = Serial0;
+        #endif
         return;
     }
+
     rc = distanceSensor.VL53L4CX_SetDistanceMode(VL53L4CX_DISTANCEMODE_LONG);
     if (rc != VL53L4CX_ERROR_NONE)
     {

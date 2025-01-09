@@ -3,7 +3,7 @@ import serial
 import sys
 import argparse
 from enum import Enum
-   
+
 improv_header="IMPROV"
 improv_version=1
 verbose=False
@@ -85,8 +85,8 @@ def monitor(ser):
         getrpcresp=5
         getdatlen=6
         getstrlen=7
-        getrpcdat=8 
-        
+        getrpcdat=8
+
     state=states.gethdr
 
     imp_type=0
@@ -96,7 +96,7 @@ def monitor(ser):
         #if verbose > 1:
         #    print(bs, end="")
         ch=int.from_bytes(bs, "big")
-       
+
         if state == states.gethdr:
             try:
                 rx_header += chr(ch)
@@ -195,17 +195,17 @@ def monitor(ser):
                 elif (ch == 4):
                     print("Unknown Error")
                 return
-                
+
             else:
                 state=states.gethdr
-        
+
         else:
             if verbose:
                 try:
                     print(bs.decode(), end="")
                 except:
                     print(bs, end="")
-                sys.stdout.flush()    
+                sys.stdout.flush()
 
 
 if __name__ == '__main__':
