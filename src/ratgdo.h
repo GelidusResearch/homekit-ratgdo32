@@ -26,13 +26,16 @@
 // RATGDO project includes
 #include "HomeSpan.h"
 #include "log.h"
-
-#define DEVICE_NAME "homekit-grgdo1"
+#ifdef GRGDO1_V1_BOARD
+#define DEVICE_NAME "homekit-grgdo1-rev1"
+#else
+#define DEVICE_NAME "homekit-grgdo1-rev2"
+#endif
 #define MANUF_NAME "Geldius Research"
 #define SERIAL_NUMBER "14EVRY1"
 #define MODEL_NAME "GRGDO1"
 #define CHIP_FAMILY "ESP32"
-#define UART1_LOG 1
+
 
 
 /********************************** PIN DEFINITIONS *****************************************/
@@ -45,8 +48,13 @@ const gpio_num_t INPUT_OBST_PIN = GPIO_NUM_23;
 //const gpio_num_t STATUS_OBST_PIN = GPIO_NUM_11;       // output for obstruction status, HIGH for obstructed, LOW for clear
 const gpio_num_t DRY_CONTACT_OPEN_PIN = GPIO_NUM_18;  // dry contact for opening door
 const gpio_num_t DRY_CONTACT_CLOSE_PIN = GPIO_NUM_19; // dry contact for closing door
-const gpio_num_t TOF_SDA_PIN = GPIO_NUM_3;   // I2C SDA GRGDO1
-const gpio_num_t TOF_SCL_PIN = GPIO_NUM_1;   // I2C SCL GRGDO1
+#ifdef GRGDO1_V1_BOARD
+const gpio_num_t TOF_SDA_PIN = GPIO_NUM_3;   // I2C SDA GRGDO1 V1 Board
+const gpio_num_t TOF_SCL_PIN = GPIO_NUM_1;   // I2C SCL GRGDO1 V1 Board
+#else
+const gpio_num_t TOF_SDA_PIN = GPIO_NUM_26;   // I2C SDA GRGDO1 V2 Board
+const gpio_num_t TOF_SCL_PIN = GPIO_NUM_25;   // I2C SCL GRGDO1 V2 Board
+#endif
 //const gpio_num_t TOF_SDA_PIN = GPIO_NUM_18;   // I2C SDA RATGDO DISCO
 //const gpio_num_t TOF_SCL_PIN = GPIO_NUM_19;   // I2C SCL RATGDO DISCO
 

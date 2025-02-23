@@ -14,7 +14,7 @@
 
 // Arduino includes
 #include <Wire.h>
-#include <vl53l4cx_class.h>
+#include <VL53L1X_class.h>
 #include "Ticker.h"
 
 // RATGDO project includes
@@ -28,7 +28,7 @@
 static const char *TAG = "ratgdo-vehicle";
 bool vehicle_setup_done = false;
 
-VL53L4CX distanceSensor(&Wire, SHUTDOWN_PIN);
+VL53L1X distanceSensor(&Wire, SHUTDOWN_PIN);
 
 static const int MIN_DISTANCE = 25;   // ignore bugs crawling on the distance sensor
 static const int MAX_DISTANCE = 4000; // 3 meters, maximum range of the sensor
@@ -50,38 +50,40 @@ void calculatePresence(int16_t distance);
 
 void setup_vehicle()
 {
-    VL53L4CX_Error rc = VL53L4CX_ERROR_NONE;
+    VL53L1X_Error rc = VL53L1X_ERROR_NONE;
     RINFO(TAG, "=== Setup VL53Lx time-of-flight sensor ===");
-    #ifdef UART1_LOG
+#ifdef GRGDO1_V1_BOARD
     Serial1.begin(115200); // Switch to Serial1 for debug output
-    Serial.end(); // Disable default serial pins
+    Serial.end();          // Disable default serial pins
     Serial = Serial1;
-    #endif
+#endif
     Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN);
     distanceSensor.begin();
-    rc = distanceSensor.InitSensor(0x59);
-    if (rc != VL53L4CX_ERROR_NONE)
+    distanceSensor.VL53L1X_On();
+    delay(50); // Give the sensor time to boot up
+    rc = distanceSensor.InitSensor(0x53);
+    if (rc != VL53L1X_ERROR_NONE)
     {
         RERROR(TAG, "ToF Sensor failed to initialize error: %d", rc);
         Wire.end(); // Disable I2C pins
-        #ifdef UART1_LOG
-        Serial1.end(); // Disable Serial1 pins
+#ifdef GRGDO1_V1_BOARD
+        Serial1.end();         // Disable Serial1 pins
         Serial0.begin(115200); // Re-enable default serial pins for improv
         Serial = Serial0;
-        #endif
+#endif
         return;
     }
 
-    rc = distanceSensor.VL53L4CX_SetDistanceMode(VL53L4CX_DISTANCEMODE_LONG);
-    if (rc != VL53L4CX_ERROR_NONE)
+    rc = distanceSensor.VL53L1X_SetDistanceMode(3);
+    if (rc != VL53L1X_ERROR_NONE)
     {
-        RERROR(TAG, "VL53L4CX_SetDistanceMode error: %d", rc);
+        RERROR(TAG, "VL53L1X_SetDistanceMode error: %d", rc);
         return;
     }
-    rc = distanceSensor.VL53L4CX_StartMeasurement();
-    if (rc != VL53L4CX_ERROR_NONE)
+    rc = distanceSensor.VL53L1X_StartRanging();
+    if (rc != VL53L1X_ERROR_NONE)
     {
-        RERROR(TAG, "VL53L4CX_StartMeasurement error: %d", rc);
+        RERROR(TAG, "VL53L1X_StartMeasurement error: %d", rc);
         return;
     }
 
@@ -92,61 +94,23 @@ void setup_vehicle()
 
 void vehicle_loop()
 {
-    if (!vehicle_setup_done)
-        return;
+    uint16_t distance;
+    if (!vehicle_setup_done) return;
 
-    uint8_t dataReady = 0;
-    if ((distanceSensor.VL53L4CX_GetMeasurementDataReady(&dataReady) == 0) && (dataReady > 0))
+    if (distanceSensor.VL53L1X_GetDistance(&distance) == VL53L1X_ERROR_NONE)
     {
-        VL53L4CX_MultiRangingData_t distanceData;
-        if (distanceSensor.VL53L4CX_GetMultiRangingData(&distanceData) == VL53L4CX_ERROR_NONE)
-        {
-            if (distanceData.NumberOfObjectsFound > 0)
-            {
-                int16_t distance = -1;
-                // Multiple objects could be found. During testing if I wave my hand in front of the
-                // sensor I get two distances... that of my hand, and that of the background.
-                // We will only record the furthest away.
-                for (int i = 0; i < distanceData.NumberOfObjectsFound; i++)
-                {
-                    // In testing I am seeing range status of 0, 4, 7 and 12.  These represent
-                    // 0:  VL53L4CX_RANGESTATUS_RANGE_VALID
-                    // 4:  VL53L4CX_RANGESTATUS_OUTOFBOUNDS_FAIL
-                    // 7:  VL53L4CX_RANGESTATUS_WRAP_TARGET_FAIL
-                    // 12: VL53L4CX_RANGESTATUS_TARGET_PRESENT_LACK_OF_SIGNAL
-                    // Documentation also suggests that valid data can be returned with:
-                    // 3:  VL53L4CX_RANGESTATUS_RANGE_VALID_MIN_RANGE_CLIPPED
-                    // 6:  VL53L4CX_RANGESTATUS_RANGE_VALID_NO_WRAP_CHECK_FAIL
-                    switch (distanceData.RangeData[i].RangeStatus)
-                    {
-                    case VL53L4CX_RANGESTATUS_RANGE_VALID:
-                    case VL53L4CX_RANGESTATUS_RANGE_VALID_MIN_RANGE_CLIPPED:
-                    case VL53L4CX_RANGESTATUS_RANGE_VALID_NO_WRAP_CHECK_FAIL:
-                        distance = std::max(distance, distanceData.RangeData[i].RangeMilliMeter);
-                        break;
-                    case VL53L4CX_RANGESTATUS_OUTOFBOUNDS_FAIL:
-                    case VL53L4CX_RANGESTATUS_WRAP_TARGET_FAIL:
-                    case VL53L4CX_RANGESTATUS_TARGET_PRESENT_LACK_OF_SIGNAL:
-                        // Bad data... assume no object, or if is one is past MAX_DISTANCE range.
-                        distance = MAX_DISTANCE;
-                        break;
-                    default:
-                        RERROR(TAG, "WARNING: Unhandled VL53L4CX RANGESTATUS value: %d", distanceData.RangeData[i].RangeStatus);
-                        break;
-                    }
-                }
-                calculatePresence(distance);
-            }
-            else
-            {
-                // No objects found, assume maximum range for purpose of calculating vehicle presence.
-                calculatePresence(MAX_DISTANCE);
-            }
-        }
-        // And start the sensor measuring again...
-        distanceSensor.VL53L4CX_ClearInterruptAndStartMeasurement();
+
+        calculatePresence(distance);
+    }
+    else
+    {
+        // No objects found, assume maximum range for purpose of calculating vehicle presence.
+        calculatePresence(MAX_DISTANCE);
     }
 
+    // And start the sensor measuring again...
+    distanceSensor.VL53L1X_ClearInterrupt();
+    distanceSensor.VL53L1X_StartRanging();
     uint64_t current_millis = millis64();
     // Vehicle Arriving Clear Timer
     if (vehicleArriving && (current_millis > vehicle_motion_timer))

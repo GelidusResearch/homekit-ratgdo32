@@ -12,6 +12,9 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-latest
+    inputs:
+      script: |
+        git config --system core.longpaths true
 
     steps:
       - name: Checkout code
