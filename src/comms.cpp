@@ -1930,7 +1930,14 @@ void obstruction_timer()
                 RINFO(TAG, "Obstruction Clear");
                 // garage_door.obstructed = false;
                 notify_homekit_obstruction(false);
+#ifdef STATUS_OBST_PIN
                 digitalWrite(STATUS_OBST_PIN, garage_door.obstructed);
+#endif
+                if (motionTriggers.bit.obstruction)
+                {
+                    // garage_door.motion = false;
+                    notify_homekit_motion(false);
+                }
                 if (motionTriggers.bit.obstruction)
                 {
                     // garage_door.motion = false;
@@ -1957,7 +1964,9 @@ void obstruction_timer()
                         RINFO(TAG, "Obstruction Detected");
                         // garage_door.obstructed = true;
                         notify_homekit_obstruction(true);
+#ifdef STATUS_OBST_PIN
                         digitalWrite(STATUS_OBST_PIN, garage_door.obstructed);
+#endif
                         if (motionTriggers.bit.obstruction)
                         {
                             // garage_door.motion = true;
