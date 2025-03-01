@@ -436,6 +436,7 @@ void handle_status()
     ADD_STR(json, "userName", userConfig->getwwwUsername().c_str());
     ADD_BOOL(json, "paired", homekit_is_paired());
     ADD_STR(json, "firmwareVersion", std::string(AUTO_VERSION).c_str());
+    ADD_STR(json, "boardVersion", std::string(BOARD_VERSION).c_str());
     // TODO find and show HomeKit accessory ID... ADD_STR(json, "accessoryID", accessoryID);
     // TODO monitor number of HomeKit "clients" connected... ADD_INT(json, "clients", clientCount);
     ADD_STR(json, cfg_localIP, userConfig->getLocalIP().c_str());
