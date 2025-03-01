@@ -1,0 +1,8 @@
+{
+  "name": "homekit-grgdo1",
+  "version": "v1.0.5",
+  "description": "Secplus Garage Door Opener for Apple HomeKit",
+  "keywords": "security+v1, security+v2, drycontact",
+  "boardname" : "GRGDO1",
+  "revision": "rev2"
+}

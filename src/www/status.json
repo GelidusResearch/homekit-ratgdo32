@@ -3,6 +3,7 @@
   "deviceName": "Garage Door ABCDEF",
   "paired": false,
   "firmwareVersion": "9.9.9",
+  "boardVersion": "rev2",
   "accessoryID": "BA:98:76:54:32:10",
   "clients": 1,
   "staticIP": true,

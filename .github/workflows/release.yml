@@ -23,12 +23,29 @@ jobs:
         id: tag
         uses: JinoArch/get-latest-tag@latest
 
+      - name: Read version.json
+        id: read_version
+        run: |
+          revision=$(jq -r '.revision' version.json)
+          echo "revision=$revision" >> $GITHUB_ENV
+
+      # - name: Create manifest if it does not exist
+      #   run: |
+      #     if [ ! -f docs/manifest-${{ env.revision }}.json ]; then
+      #       echo '{
+      #         "name": "homekit-grgdo1-${{ env.revision }}",
+      #         "version": "v0.0.0",
+      #         "new_install_prompt_erase": true,
+      #         "new_install_improv_wait_time": 30,
+      #       }' > docs/manifest-${{ env.revision }}.json
+      #     fi
+
       - name: Update version on manifest.json
         uses: amochkin/action-json@v1
         id: write_version
         with:
           mode: write
-          file: docs/manifest.json
+          file: docs/manifest-${{ env.revision }}.json
           property: version
           value: ${{ steps.tag.outputs.latestTag }}
           value_type: string
@@ -38,33 +55,83 @@ jobs:
         id: builds_parts_path_0
         with:
           mode: write
-          file: docs/manifest.json
+          file: docs/manifest-${{ env.revision }}.json
           property: builds.0.parts.0.path
-          value: firmware/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          value: firmware/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.bootloader.bin
           value_type: string
+
+      - name: Write offset property to manifest.json
+        uses: amochkin/action-json@v1
+        id: builds_parts_offset_0
+        with:
+          mode: write
+          file: docs/manifest-${{ env.revision }}.json
+          property: builds.0.parts.0.offset
+          value: 4096
+          value_type: number
 
       - name: Update firmware/*.partitions.bin version on manifest.json
         uses: amochkin/action-json@v1
         id: builds_parts_path_1
         with:
           mode: write
-          file: docs/manifest.json
+          file: docs/manifest-${{ env.revision }}.json
           property: builds.0.parts.1.path
-          value: firmware/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          value: firmware/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.partitions.bin
           value_type: string
+
+      - name: Write offset property to manifest.json
+        uses: amochkin/action-json@v1
+        id: builds_parts_offset_1
+        with:
+          mode: write
+          file: docs/manifest-${{ env.revision }}.json
+          property: builds.0.parts.1.offset
+          value: 32768
+          value_type: number
+
+      - name: Update firmware/*.partitions.bin version on manifest.json
+        uses: amochkin/action-json@v1
+        id: builds_parts_path_2
+        with:
+          mode: write
+          file: docs/manifest-${{ env.revision }}.json
+          property: builds.0.parts.2.path
+          value: firmware/boot_app0.bin
+          value_type: string
+
+      - name: Write offset property to manifest.json
+        uses: amochkin/action-json@v1
+        id: builds_parts_offset_2
+        with:
+          mode: write
+          file: docs/manifest-${{ env.revision }}.json
+          property: builds.0.parts.2.offset
+          value: 57344
+          value_type: number
 
       - name: Update firmware/*.bin version on manifest.json
         uses: amochkin/action-json@v1
         id: builds_parts_path_3
         with:
           mode: write
-          file: docs/manifest.json
+          file: docs/manifest-${{ env.revision }}.json
           property: builds.0.parts.3.path
-          value: firmware/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.bin
+          value: firmware/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.bin
           value_type: string
 
+      - name: Write offset property to manifest.json
+        uses: amochkin/action-json@v1
+        id: builds_parts_offset_3
+        with:
+          mode: write
+          file: docs/manifest-${{ env.revision }}.json
+          property: builds.0.parts.3.offset
+          value: 65536
+          value_type: number
+
       - name: Output created (or overwritten) manifest.json
-        run: cat docs/manifest.json
+        run: cat docs/manifest-${{ env.revision }}.json
         shell: bash
 
       - name: Output read value of 'version' & `parts` property
@@ -74,17 +141,20 @@ jobs:
       - name: Attach manifest.json
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: "/home/runner/work/homekit-ratgdo32/homekit-ratgdo32/docs/manifest.json"
+          files: "/home/runner/work/homekit-ratgdo32/homekit-ratgdo32/docs/manifest-${{ env.revision }}.json"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           release-tag: ${{ steps.tag.outputs.latestTag }}
+          overwrite: true
+
 
       - name: Upload Release manifest.json
         uses: wow-actions/download-upload@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/manifest.json
+          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/manifest-${{ env.revision }}.json
           dir: docs/
-          commit_message: "Upload Latest manifest.json for ${{ steps.tag.outputs.latestTag }}"
+          commit_message: "Upload Latest manifest-${{ env.revision }}.json for ${{ steps.tag.outputs.latestTag }}"
+          overwrite: true
 
       - uses: actions/cache@v3
         with:
@@ -110,38 +180,40 @@ jobs:
 
       - name: Rename Firmware Files
         run: |
-          mv .pio/build/ratgdo_esp32dev/firmware.bin .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.bin
-          mv .pio/build/ratgdo_esp32dev/bootloader.bin .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.bootloader.bin
-          mv .pio/build/ratgdo_esp32dev/partitions.bin .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.partitions.bin
-          mv .pio/build/ratgdo_esp32dev/firmware.elf .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.elf
-          mv .pio/build/ratgdo_esp32dev/firmware.md5 .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.md5
+          mv .pio/build/ratgdo_esp32dev/firmware.bin .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.bin
+          mv .pio/build/ratgdo_esp32dev/bootloader.bin .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          mv .pio/build/ratgdo_esp32dev/partitions.bin .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          mv .pio/build/ratgdo_esp32dev/firmware.elf .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.elf
+          mv .pio/build/ratgdo_esp32dev/firmware.md5 .pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.md5
 
       - name: Attach Bundle - firmware.bin
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: ".pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.bin"
+          files: ".pio/build/ratgdo_esp32dev/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.bin"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           release-tag: ${{ steps.tag.outputs.latestTag }}
-        
+          overwrite: true
+
       - name: Upload Release Asset - firmware.bin
         uses: wow-actions/download-upload@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.bin
+          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.bin
           dir: docs/firmware/
-          commit_message: "Upload Latest Firmware: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.bin"
+          commit_message: "Upload Latest Firmware: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.bin"
+          overwrite: true
 
       - name: Upload firmware.bin
         uses: actions/upload-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.bin
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.bin
           path: |
             .pio/build/ratgdo_esp32dev/*.firmware.bin
 
       - name: Download firmware.bin
         uses: actions/download-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.bin
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.bin
           path: |
             docs/firmware/
 
@@ -156,21 +228,21 @@ jobs:
         uses: wow-actions/download-upload@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.bootloader.bin
           dir: docs/firmware/
-          commit_message: "Upload Latest bootloader: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.bootloader.bin"
+          commit_message: "Upload Latest bootloader: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.bootloader.bin"
 
       - name: Upload bootloader.bin
         uses: actions/upload-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.bootloader.bin
           path: |
             .pio/build/ratgdo_esp32dev/*.bootloader.bin
 
       - name: Download bootloader.bin
         uses: actions/download-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.bootloader.bin
           path: |
             docs/firmware/
 
@@ -185,21 +257,21 @@ jobs:
         uses: wow-actions/download-upload@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.partitions.bin
           dir: docs/firmware/
-          commit_message: "Upload Latest partitions: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.partitions.bin"
+          commit_message: "Upload Latest partitions: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.partitions.bin"
 
       - name: Upload partitions.bin
         uses: actions/upload-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.partitions.bin
           path: |
             .pio/build/ratgdo_esp32dev/*.partitions.bin
 
       - name: Download partitions.bin
         uses: actions/download-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.partitions.bin
           path: |
             docs/firmware/
 
@@ -214,21 +286,21 @@ jobs:
         uses: wow-actions/download-upload@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.md5
+          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.md5
           dir: docs/firmware/
-          commit_message: "Upload Latest md5: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.md5"
+          commit_message: "Upload Latest md5: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.md5"
 
       - name: Upload firmware.md5
         uses: actions/upload-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.md5
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.md5
           path: |
             .pio/build/ratgdo_esp32dev/*.firmware.md5
 
       - name: Download firmware.md5
         uses: actions/download-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.firmware.md5
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.firmware.md5
           path: |
             docs/firmware/
 
@@ -243,20 +315,20 @@ jobs:
         uses: wow-actions/download-upload@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.elf 
+          url: https://github.com/gelidusresearch/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.elf 
           dir: docs/firmware/
-          commit_message: "Upload Latest Firmware: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.elf"
+          commit_message: "Upload Latest Firmware: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.elf"
 
       - name: Upload Firmware.elf
         uses: actions/upload-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.elf
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.elf
           path: |
             .pio/build/ratgdo_esp32dev/*.elf
 
       - name: Download Firmware.elf
         uses: actions/download-artifact@v4
         with:
-          name: homekit-grgdo1-${{ steps.tag.outputs.latestTag }}.elf
+          name: homekit-grgdo1-${{ env.revision }}-${{ steps.tag.outputs.latestTag }}.elf
           path: |
             docs/firmware/

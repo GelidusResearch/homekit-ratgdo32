@@ -15,7 +15,7 @@
 
 // Arduino includes
 #include <Wire.h>
-#include <VL53L1X_class.h>
+#include <vl53l1x_class.h>
 #include "Ticker.h"
 
 // RATGDO project includes
@@ -58,11 +58,22 @@ void setup_vehicle()
     Serial.end();          // Disable default serial pins
     Serial = Serial1;
 #endif
-    Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN);
+    Wire.begin(TOF_SDA_PIN, TOF_SCL_PIN, 400000);
+    Wire.beginTransmission(0x29);
+    if (Wire.endTransmission() == 0) {
+        RINFO(TAG, "VL53L1X ToF detected at address 0x29");
+    } else {
+        RERROR(TAG, "VL53L1X ToF not detected at address 0x29");
+        Wire.end(); // Disable I2C pins
+#ifdef GRGDO1_V1_BOARD
+        Serial1.end();         // Disable Serial1 pins
+        Serial0.begin(115200); // Re-enable default serial pins for improv
+        Serial = Serial0;
+#endif
+        return;
+    }
     distanceSensor.begin();
-    distanceSensor.VL53L1X_On();
-    delay(50); // Give the sensor time to boot up
-    rc = distanceSensor.InitSensor(0x53);
+    rc = distanceSensor.InitSensor(0x29);
     if (rc != VL53L1X_ERROR_NONE)
     {
         RERROR(TAG, "ToF Sensor failed to initialize error: %d", rc);
