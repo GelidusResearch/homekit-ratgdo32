@@ -249,6 +249,10 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("firmwareVersion2").innerHTML = value;
                 break;
+            case "boardVersion":
+                document.getElementById(key).innerHTML = value;
+                document.getElementById("boardVersion").innerHTML = value;
+                break;
             /* TODO add support for selecting WiFi PhyMode and WiFi TX Power
             case "wifiPhyMode":
                 document.getElementById("wifiPhyMode0").checked = (value == 0) ? true : false;
@@ -476,7 +480,7 @@ async function checkVersion(progress) {
             return (obj.content_type === "application/octet-stream") && obj.name.startsWith("homekit-grgdo1") && obj.name.includes("firmware");
         });
         serverStatus.downloadURL = "https://gelidusresearch.github.io/homekit-ratgdo32/firmware/" + asset.name;
-        msg = "You have newest release";
+        msg = "You have the newest release";
         if (serverStatus.firmwareVersion < latest.tag_name) {
             // Newest version at GitHub is greater from that installed
             msg = "Update available  (" + latest.tag_name + ")";

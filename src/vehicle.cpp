@@ -15,7 +15,7 @@
 
 // Arduino includes
 #include <Wire.h>
-#include <VL53L1X_class.h>
+#include <vl53l1x_class.h>
 #include "Ticker.h"
 
 // RATGDO project includes
