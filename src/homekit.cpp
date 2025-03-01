@@ -267,7 +267,11 @@ void setup_homekit()
     new DEV_Info(device_name);
     new Characteristic::Manufacturer("Gelidus Research");
     new Characteristic::SerialNumber(Network.macAddress().c_str());
-    new Characteristic::Model("GRGDO1");
+#ifdef GRGDO1_V1_BOARD
+    new Characteristic::Model("GRGDO1 rev1");
+#else
+    new Characteristic::Model("GRGDO1 rev2");
+#endif
     new Characteristic::FirmwareRevision(AUTO_VERSION);
     door = new DEV_GarageDoor();
 
