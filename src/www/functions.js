@@ -249,10 +249,6 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("firmwareVersion2").innerHTML = value;
                 break;
-            case "boardVersion":
-                document.getElementById(key).innerHTML = value;
-                document.getElementById("boardVersion").innerHTML = value;
-                break;
             /* TODO add support for selecting WiFi PhyMode and WiFi TX Power
             case "wifiPhyMode":
                 document.getElementById("wifiPhyMode0").checked = (value == 0) ? true : false;

@@ -6,6 +6,7 @@
     <meta http-equiv="Expires" content="0" />
 </head>
 <body>
+    <h1>Gelidus Research</h1>
     <h1>GRGDO1 WEB installer for HomeKit integrations</h1>
     <script type="module" src="https://unpkg.com/esp-web-tools@9/dist/web/install-button.js?module&v=1.0.0"></script>
     <style type="text/css">
@@ -19,21 +20,43 @@
         http://192.168.4.1
     </p>
 
-    <p>The GRGDO1 currently uses a USB to UART adapter for flash programing. Otherwise the firmware is preloaded and you can use the captive portal as an option.</p>
+    <p>The GRGDO1 v1 board uses a USB to UART and the v2 board uses a direct USB-C connection adapter for flash programing.</p>
+	<p>The v1 board will need the flash button depressed for about 1 second on power up to enable flash mode.</p>
+	<p>The v2 board is plug and play. Simply connect it.</p>
+	<p>Otherwise the firmware is preloaded and you can use the captive portal as an option.</p>
 
-    <h3>This may take a while!</h3>
-    <p>The setup process may take as long as a full minute, so please be patient.</p>
+    <h3>Firmware Install Process:</h3>
+    <p>A normal flashing process can take upto a full minute, so please be patient.</p>
+    <p>Select the target board version.</p>
+    <div>
+        <input type="radio" id="v1-board" name="board-version" value="rev1">
+        <label for="v1-board">GRGDO1 v1 board</label>
+    </div>
+    <div>
+        <input type="radio" id="v2-board" name="board-version" value="rev2" checked>
+        <label for="v2-board">GRGDO1 v2 board</label>
+    </div>
 
-    <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
-    <script>
-        const button = document.querySelector('esp-web-install-button');
-        button.overrides = {
-            checkSameFirmware(manifest, improvInfo) {
-                const manifestFirmware = manifest.name.toLowerCase();
-                const deviceFirmware = improvInfo.firmware.toLowerCase();
-                return manifestFirmware.includes(deviceFirmware);
-            }
-        };
-    </script>
+   <p>After physically attaching to USB, you can start the flashing process with the CONNECT button:
+    </p>
+
+    <esp-web-install-button id="install-button" class="invisible" manifest="manifest-rev2.json"></esp-web-install-button>
+	<script>
+		document.querySelectorAll('input[name="board-version"]').forEach(radio =>
+			radio.addEventListener("change", () => {
+				const button = document.querySelector('esp-web-install-button');
+				button.manifest = `manifest-${radio.value}.json`;
+				button.classList.remove('invisible');
+				button.overrides = {
+					checkSameFirmware(manifest, improvInfo) {
+						const manifestFirmware = manifest.name.toLowerCase();
+						const deviceFirmware = improvInfo.firmware.toLowerCase();
+						return manifestFirmware.includes(deviceFirmware);
+					}
+				};
+			})
+		);
+	</script>
 </body>
+</html>
 </html>
