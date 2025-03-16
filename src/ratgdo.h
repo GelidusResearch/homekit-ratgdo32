@@ -32,7 +32,7 @@
 #define SERIAL_NUMBER "14EVRY1"
 #define MODEL_NAME "GRGDO1"
 #define CHIP_FAMILY "ESP32"
-#define BOARD_VERSION "rev2"
+#define BOARD_VERSION "rev1"
 #define TOF_I2C_RATE 400000
 
 /********************************** PIN DEFINITIONS *****************************************/

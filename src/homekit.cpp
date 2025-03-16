@@ -270,7 +270,7 @@ void setup_homekit()
 #ifdef GRGDO1_V1_BOARD
     new Characteristic::Model("GRGDO1 rev1");
 #else
-    new Characteristic::Model("GRGDO1 rev2");
+    new Characteristic::Model("GRGDO1 rev1");
 #endif
     new Characteristic::FirmwareRevision(AUTO_VERSION);
     door = new DEV_GarageDoor();
