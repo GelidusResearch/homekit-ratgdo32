@@ -1,5 +1,5 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
@@ -62,10 +62,12 @@ public:
             break;
         }
 
+        /* reduce noise in logs
         if (msg_ready)
         {
-            RINFO(TAG, "reader completed packet");
+            ESP_LOGI(TAG, "reader completed packet");
         }
+        */
         return msg_ready;
     };
 

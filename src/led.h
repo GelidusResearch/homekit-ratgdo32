@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -16,10 +16,8 @@
 // Arduino includes
 #include <Ticker.h>
 
-// RATGDO project includes
-// none
-
 #define FLASH_MS 500 // default flash period, 500ms
+#define FLASH_ACTIVITY_MS 250
 
 class LED
 {
@@ -33,15 +31,17 @@ private:
     Ticker LEDtimer;
 
 public:
-    LED(uint8_t gpio_num, uint8_t state = 1);
+    explicit LED(uint8_t gpio_num, uint8_t state = 1);
     void on();
     void off();
     void idle();
     bool state() { return (currentState == onState); };
-    void flash(unsigned long ms = FLASH_MS);
+    void flash(uint64_t ms = FLASH_MS);
     void setIdleState(uint8_t state);
     uint8_t getIdleState() { return idleState; };
 };
 
 extern LED led;
+#ifdef RATGDO32_DISCO
 extern LED laser;
+#endif

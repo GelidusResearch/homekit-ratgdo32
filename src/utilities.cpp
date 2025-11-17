@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -18,10 +18,14 @@
 #include <algorithm>
 
 // ESP system includes
+#ifdef ESP8266
+#include <ESP8266WiFi.h>
+#include <ESP8266HTTPClient.h>
+#include "LittleFS.h"
+#else
 #include <esp_sntp.h>
-
-// Arduino system includes
 #include <HTTPClient.h>
+#endif
 
 // RATGDO project includes
 #include "ratgdo.h"
@@ -33,8 +37,8 @@
 // Logger tag
 static const char *TAG = "ratgdo-utils";
 
-// What trigger motion...
-motionTriggersUnion motionTriggers = {0, 0, 0, 0, 0, 0};
+// What trigger motion... default to enable the motion sensor...
+motionTriggersUnion motionTriggers = {1, 0, 0, 0, 0, 0};
 // Control booting into soft access point mode
 bool softAPmode = false;
 // Realm for MD5 credential hashing
@@ -42,11 +46,10 @@ const char www_realm[] = "RATGDO Login Required";
 // automatically reboot after X seconds
 uint32_t rebootSeconds = 0;
 
-#ifdef NTP_CLIENT
-bool clockSet = false;
+time_t clockSet = 0;
 bool enableNTP = false;
-unsigned long lastRebootAt = 0;
-int32_t savedDoorUpdateAt = 0;
+uint64_t lastRebootAt = 0;
+#define SNTP_SYNC_INTERVAL (60 * 60 * 1000) // 60 minutes
 
 bool get_auto_timezone()
 {
@@ -54,7 +57,7 @@ bool get_auto_timezone()
     WiFiClient client;
     HTTPClient http;
 
-    RINFO(TAG, "Get timezone automatically based on IP address");
+    ESP_LOGI(TAG, "Get timezone automatically based on IP address");
     if (http.begin(client, "http://ip-api.com/csv/?fields=timezone"))
     {
         // start connection and send HTTP header
@@ -65,7 +68,7 @@ bool get_auto_timezone()
             String tz = http.getString();
             tz.trim();
             userConfig->set(cfg_timeZone, tz.c_str());
-            RINFO(TAG, "Automatic timezone set to: %s", userConfig->getTimeZone().c_str());
+            ESP_LOGI(TAG, "Automatic timezone set to: %s", userConfig->getTimeZone());
             success = true;
         }
         http.end();
@@ -73,9 +76,39 @@ bool get_auto_timezone()
     return success;
 }
 
-void time_is_set(timeval *tv)
+#ifdef ESP8266
+void time_is_set(bool from_sntp)
 {
-    clockSet = true;
+    clockSet = time(NULL);
+}
+
+uint32_t sntp_update_delay_MS_rfc_not_less_than_15000()
+{
+    return SNTP_SYNC_INTERVAL; // update every 60 minutes
+}
+#else
+void time_is_set(struct timeval *tv)
+{
+    // Keep this callback function short and simple. Do not use our logging functions, as it may hang.
+    clockSet = tv->tv_sec;
+}
+#endif
+
+bool strEmptyOrSpaces(const char *str)
+{
+    if (str == NULL)
+    {
+        return true; // Consider NULL as empty
+    }
+    // Iterate through the string
+    for (int i = 0; str[i] != '\0'; i++)
+    {
+        if (!isspace((unsigned char)str[i]))
+        {
+            return false; // Found a non-whitespace character
+        }
+    }
+    return true; // All characters were whitespace or the string was empty
 }
 
 char *timeString(time_t reqTime, bool syslog)
@@ -90,10 +123,10 @@ char *timeString(time_t reqTime, bool syslog)
         localtime_r(&tTime, &tmTime);
         if (syslog)
         {
-            // syslog compatibe
+            // syslog compatible
             strftime(tBuffer, sizeof(tBuffer), "%Y-%m-%dT%H:%M:%S.000%z", &tmTime);
             // %z returns e.g. "-400" or "+1000", we need it to be "-4:00" or "+10:00"
-            // thie format is REQUIRED by syslog
+            // this format is REQUIRED by syslog
             int i = strlen(tBuffer);
             if (tBuffer[i - 5] == '-' || tBuffer[i - 5] == '+' ||
                 tBuffer[i - 6] == '-' || tBuffer[i - 6] == '+')
@@ -112,16 +145,53 @@ char *timeString(time_t reqTime, bool syslog)
     }
     return tBuffer;
 }
-#endif
+
+char *toHHMMSSmmm(_millis_t t)
+{
+    static char timestr[16];
+    uint32_t secs = t / 1000;
+    uint32_t ms = t % 1000;
+    uint32_t mins = secs / 60;
+    secs = secs % 60;
+    uint32_t hrs = mins / 60;
+    mins = mins % 60;
+    snprintf(timestr, sizeof(timestr), "%02u:%02u:%02u.%03u", hrs, mins, secs, ms);
+    return timestr;
+}
+
+#ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
+void printTaskInfo(const char *buf)
+{
+    int count = uxTaskGetNumberOfTasks();
+    TaskStatus_t *tasks = static_cast<TaskStatus_t *>(pvPortMalloc(sizeof(TaskStatus_t) * count));
+    if (tasks != NULL)
+    {
+        uxTaskGetSystemState(tasks, count, NULL);
+        Serial.print("\n-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n");
+        Serial.print("Name                    Core\tPri\tStack\tState\n");
+        for (size_t i = 0; i < count; i++)
+        {
+            Serial.printf("%s\t%s\t%4d\t%3d\t%5d\t%s\n", const_cast<char *>(tasks[i].pcTaskName),
+                          strlen(const_cast<char *>(tasks[i].pcTaskName)) > 7 ? "" : "\t",
+                          (int)(tasks[i].xCoreID < 16) ? tasks[i].xCoreID : -1,
+                          (int)tasks[i].uxBasePriority,
+                          (int)tasks[i].usStackHighWaterMark,
+                          (magic_enum::enum_name(tasks[i].eCurrentState)).data());
+        }
+        Serial.print("-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n\n");
+    }
+    vPortFree(tasks);
+};
+#endif // CONFIG_FREERTOS_USE_TRACE_FACILITY
 
 char *make_rfc952(char *dest, const char *src, int size)
 {
-    // Make device name RFC952 complient (simple, just checking for the basics)
+    // Make device name RFC952 compliant (simple, just checking for the basics)
     // RFC952 says max len of 24, [a-z][A-Z][0-9][-.] and no dash or period in last char.
     int i = 0;
     while (i <= std::min(24, size - 1) && src[i] != 0)
     {
-        dest[i] = (std::isspace((unsigned char)src[i])) ? '-' : src[i];
+        dest[i] = (std::isalnum((int)src[i]) || src[i] == '.') ? src[i] : '-';
         i++;
     }
     // remove dashes and periods from end of name
@@ -136,89 +206,126 @@ char *make_rfc952(char *dest, const char *src, int size)
 
 void load_all_config_settings()
 {
-    RINFO(TAG, "=== Load all config settings for %s", device_name);
-
+    ESP_LOGI(TAG, "=== Load all config settings for %s", device_name);
     userConfig->load();
     // Set globals...
-    strlcpy(device_name, userConfig->getDeviceName().c_str(), sizeof(device_name));
+    strlcpy(device_name, userConfig->getDeviceName(), sizeof(device_name));
     make_rfc952(device_name_rfc952, device_name, sizeof(device_name_rfc952));
     led.setIdleState(userConfig->getLEDidle());
     motionTriggers.asInt = userConfig->getMotionTriggers();
     softAPmode = userConfig->getSoftAPmode();
-    strlcpy(syslogIP, userConfig->getSyslogIP().c_str(), sizeof(syslogIP));
+    strlcpy(syslogIP, userConfig->getSyslogIP(), sizeof(syslogIP));
     syslogPort = userConfig->getSyslogPort();
     syslogEn = userConfig->getSyslogEn();
+    syslogFacility = userConfig->getSyslogFacility();
     rebootSeconds = userConfig->getRebootSeconds();
+    garage_door.builtInTTC = userConfig->getBuiltInTTC();
 
     // Now log what we have loaded
-    RINFO(TAG, "   deviceName:          %s", userConfig->getDeviceName().c_str());
-    RINFO(TAG, "   wifiChanged:         %s", userConfig->getWifiChanged() ? "true" : "false");
-    RINFO(TAG, "   wifiPower:           %d", userConfig->getWifiPower());
-    RINFO(TAG, "   wifiPhyMode:         %d", userConfig->getWifiPhyMode());
-    RINFO(TAG, "   staticIP:            %s", userConfig->getStaticIP() ? "true" : "false");
-    RINFO(TAG, "   localIP:             %s", userConfig->getLocalIP().c_str());
-    RINFO(TAG, "   subnetMask:          %s", userConfig->getSubnetMask().c_str());
-    RINFO(TAG, "   gatewayIP:           %s", userConfig->getGatewayIP().c_str());
-    RINFO(TAG, "   nameserverIP:        %s", userConfig->getNameserverIP().c_str());
-    RINFO(TAG, "   wwwPWrequired:       %s", userConfig->getPasswordRequired() ? "true" : "false");
-    RINFO(TAG, "   wwwUsername:         %s", userConfig->getwwwUsername().c_str());
-    RINFO(TAG, "   wwwCredentials:      %s", userConfig->getwwwCredentials().c_str());
-    RINFO(TAG, "   GDOSecurityType:     %d", userConfig->getGDOSecurityType());
-    RINFO(TAG, "   TTCseconds:          %d", userConfig->getTTCseconds());
-    RINFO(TAG, "   rebootSeconds:       %d", userConfig->getRebootSeconds());
-    RINFO(TAG, "   LEDidle:             %d", userConfig->getLEDidle());
-    RINFO(TAG, "   motionTriggers:      %d", userConfig->getMotionTriggers());
-#ifdef NTP_CLIENT
-    RINFO(TAG, "   enableNTP:           %s", userConfig->getEnableNTP() ? "true" : "false");
-    RINFO(TAG, "   doorUpdateAt:        %d", userConfig->getDoorUpdateAt());
-    RINFO(TAG, "   timeZone:            %s", userConfig->getTimeZone().c_str());
+    ESP_LOGI(TAG, "   deviceName:          %s", userConfig->getDeviceName());
+    ESP_LOGI(TAG, "   wifiChanged:         %s", userConfig->getWifiChanged() ? "true" : "false");
+    ESP_LOGI(TAG, "   wifiPower:           %d", userConfig->getWifiPower());
+    ESP_LOGI(TAG, "   wifiPhyMode:         %d", userConfig->getWifiPhyMode());
+    ESP_LOGI(TAG, "   staticIP:            %s", userConfig->getStaticIP() ? "true" : "false");
+    ESP_LOGI(TAG, "   localIP:             %s", userConfig->getLocalIP());
+    ESP_LOGI(TAG, "   subnetMask:          %s", userConfig->getSubnetMask());
+    ESP_LOGI(TAG, "   gatewayIP:           %s", userConfig->getGatewayIP());
+    ESP_LOGI(TAG, "   nameserverIP:        %s", userConfig->getNameserverIP());
+    ESP_LOGI(TAG, "   wwwPWrequired:       %s", userConfig->getPasswordRequired() ? "true" : "false");
+    ESP_LOGI(TAG, "   wwwUsername:         %s", userConfig->getwwwUsername());
+    ESP_LOGI(TAG, "   wwwCredentials:      %s", userConfig->getwwwCredentials());
+    ESP_LOGI(TAG, "   GDOSecurityType:     %d", userConfig->getGDOSecurityType());
+    ESP_LOGI(TAG, "   TTCseconds:          %d", userConfig->getTTCseconds());
+    ESP_LOGI(TAG, "   rebootSeconds:       %d", userConfig->getRebootSeconds());
+    ESP_LOGI(TAG, "   LEDidle:             %d", userConfig->getLEDidle());
+    ESP_LOGI(TAG, "   motionTriggers:      %d", userConfig->getMotionTriggers());
+    ESP_LOGI(TAG, "   obstFromStatus:      %s", userConfig->getObstFromStatus() ? "true" : "false");
+    ESP_LOGI(TAG, "   enableNTP:           %s", userConfig->getEnableNTP() ? "true" : "false");
+    ESP_LOGI(TAG, "   doorUpdateAt:        %d (%s)", userConfig->getDoorUpdateAt(), timeString(userConfig->getDoorUpdateAt()));
+    ESP_LOGI(TAG, "   doorOpenAt:          %d (%s)", userConfig->getDoorOpenAt(), timeString(userConfig->getDoorOpenAt()));
+    ESP_LOGI(TAG, "   doorCloseAt:         %d (%s)", userConfig->getDoorCloseAt(), timeString(userConfig->getDoorCloseAt()));
+    ESP_LOGI(TAG, "   timeZone:            %s", userConfig->getTimeZone());
+    ESP_LOGI(TAG, "   softAPmode:          %s", userConfig->getSoftAPmode() ? "true" : "false");
+    ESP_LOGI(TAG, "   syslogEn:            %s", userConfig->getSyslogEn() ? "true" : "false");
+    ESP_LOGI(TAG, "   syslogIP:            %s", userConfig->getSyslogIP());
+    ESP_LOGI(TAG, "   syslogPort:          %d", userConfig->getSyslogPort());
+    ESP_LOGI(TAG, "   syslogFacility:      %d", userConfig->getSyslogFacility());
+#ifdef RATGDO32_DISCO
+    // Features not available on ESP8266
+    ESP_LOGI(TAG, "   vehicleThreshold:    %d", userConfig->getVehicleThreshold());
+    ESP_LOGI(TAG, "   vehicleHomeKit:      %s", userConfig->getVehicleHomeKit() ? "true" : "false");
+    ESP_LOGI(TAG, "   laserEnabled:        %s", userConfig->getLaserEnabled() ? "true" : "false");
+    ESP_LOGI(TAG, "   laserHomeKit:        %s", userConfig->getLaserHomeKit() ? "true" : "false");
+    ESP_LOGI(TAG, "   assistDuration:      %d", userConfig->getAssistDuration());
 #endif
-    RINFO(TAG, "   softAPmode:          %s", userConfig->getSoftAPmode() ? "true" : "false");
-    RINFO(TAG, "   syslogEn:            %s", userConfig->getSyslogEn() ? "true" : "false");
-    RINFO(TAG, "   syslogIP:            %s", userConfig->getSyslogIP().c_str());
-    RINFO(TAG, "   syslogPort:          %d", userConfig->getSyslogPort());
-    RINFO(TAG, "   vehicleThreshold:    %d", userConfig->getVehicleThreshold());
-    RINFO(TAG, "RFC952 device hostname: %s", device_name_rfc952);
+#ifndef ESP8266
+    ESP_LOGI(TAG, "   occupancyDuration:   %d", userConfig->getOccupancyDuration());
+    ESP_LOGI(TAG, "   enableIPv6:          %s", userConfig->getEnableIPv6() ? "true" : "false");
+    ESP_LOGI(TAG, "   homespanCLI:         %s", userConfig->getEnableHomeSpanCLI() ? "true" : "false");
+#endif
+    ESP_LOGI(TAG, "RFC952 device hostname: %s", device_name_rfc952);
 
-#ifdef NTP_CLIENT
     // Only enable NTP client if not in soft AP mode.
     enableNTP = !softAPmode && userConfig->getEnableNTP();
     if (enableNTP)
     {
+#ifdef ESP8266
+        settimeofday_cb(time_is_set);
+#else
         sntp_set_time_sync_notification_cb(time_is_set);
-        RINFO(TAG, "Timezone: %s", userConfig->getTimeZone().c_str());
+        sntp_set_sync_interval(SNTP_SYNC_INTERVAL);
+#endif
+        ESP_LOGI(TAG, "Timezone: %s", userConfig->getTimeZone());
         std::string tz = userConfig->getTimeZone();
         size_t pos = tz.find(';');
         if (pos != std::string::npos)
         {
             // semicolon may separate continent/city from posix TZ string
-            // if no semicolon then no POSIX code, so use UTC
-            RINFO(TAG, "Set timezone: %s", tz.substr(pos + 1).c_str());
+            ESP_LOGI(TAG, "Set timezone: %s", tz.substr(pos + 1).c_str());
             configTzTime(tz.substr(pos + 1).c_str(), NTP_SERVER);
         }
         else
         {
-            RINFO(TAG, "Set timezone: UTC0");
+            // if no semicolon then no POSIX code, so use UTC
+            ESP_LOGI(TAG, "Set timezone: UTC0");
             configTzTime("UTC0", NTP_SERVER);
         }
     }
-#endif
 }
 
 void sync_and_restart()
 {
+    shutdown_comms();
+
+    if (clockSet)
+    {
+        // Log time we shut down.
+        ESP_LOGI(TAG, "System boot time:    %s", timeString(lastRebootAt));
+        ESP_LOGI(TAG, "Reboot requested at: %s", timeString());
+    }
     if (softAPmode)
     {
         // reset so next reboot will be standard station mode
         userConfig->set(cfg_softAPmode, false);
+        ESP8266_SAVE_CONFIG();
     }
     else
     {
         // In soft AP mode we never initialized garage door comms, so don't save rolling code.
         save_rolling_code();
     }
-
+#ifdef ESP8266
+    WiFi.mode(WIFI_OFF);
+    WiFi.forceSleepBegin();
+    // Save current logs in case needed for future analysis
+    File file = LittleFS.open(REBOOT_LOG_MSG_FILE, "w");
+    ratgdoLogger->printMessageLog(file);
+    file.close();
+    LittleFS.end();
+#else
+    // Save current logs in case needed for future analysis
     ratgdoLogger->saveMessageLog();
+#endif
     delay(100);
     ESP.restart();
 }

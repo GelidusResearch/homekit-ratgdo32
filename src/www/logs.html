@@ -2,7 +2,7 @@
 <html lang="en">
 
 <head>
-  <!--  Copyright (c) 2024 David Kerr, https://github.com/dkerr64 -->
+  <!--  Copyright (c) 2024-25 David Kerr, https://github.com/dkerr64 -->
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=1">
   <meta name="apple-mobile-web-app-title" content="RATDGO">
@@ -12,13 +12,13 @@
   <title>HomeKit Garage Door Logs</title>
   <link rel="stylesheet" href="style.css?v=CRC-32">
   <link rel="icon" href="favicon.png?v=CRC-32" type="image/png">
-  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=CRC-32" type="image/png"> 
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=CRC-32" type="image/png">
   <script src="logs.js?v=CRC-32"></script>
 </head>
 
 <body>
   <!-- Title section of page ------------------------------------------------------------------>
-  <div class="fullpage" style="max-width: 100%; height: 98vh; display:flex; flex-flow: column;">
+  <div class="logspage" style="max-width: 100%; height: 98vh; display:flex; flex-flow: column;">
     <div id="loader" class="ldrcenter"></div>
     <div class="header logheader">
       <div class="logo">
@@ -33,6 +33,11 @@
       <div class="name">
         <p id="deviceName" style="margin:0px;">Garage Door</p>
       </div>
+      <div
+        style="float: right; vertical-align: middle; padding-left: 0; padding-right: 0; cursor: pointer; position: absolute; right: 0;">
+        <img id="main-icon" src="garage-car.svg?v=CRC-32" alt="Homepage" onclick="history.back()"
+          style="width: 1.5em; height: 1.5em;">
+      </div>
     </div>
     <!-- view selection tabs ------------------------------------------------------------------->
     <div class="tab">
@@ -40,36 +45,42 @@
       <button class="tablinks" onclick="openTab(event, 'statusTab')">Status</button>
       <button class="tablinks" onclick="openTab(event, 'rebootTab')">Reboot Log</button>
       <button class="tablinks" onclick="openTab(event, 'crashTab')">Crash Log</button>
+      <input id="clearLogBtn" type="button" value="Clear log"
+        style="display: none; margin-left: 1em; margin-top: 0.8em;"
+        onclick="return confirm('Clear log, are you sure?') && clearLog(false);">
+      <input id="reloadLogButton" type="button" value="Reload" style="display: none;"
+        onclick="return confirm('Clear and reload log, are you sure?') && clearLog(true);">
       <input id="clearBtn" type="button" value="Clear crash log"
-        style="display: none; margin-left: 2em; margin-top: 0.8em;"
+        style="display: none; margin-left: 1em; margin-top: 0.8em;"
         onclick="return confirm('Clear crash log, are you sure?') && clearCrashLog();">
     </div>
     <!-- Main section of page ------------------------------------------------------------------>
     <div id="statusTab" class="tabcontent">
       <p style="margin: 0px;">RATGDO device status...</p>
-      <pre id="statusjson">
+      <pre id="statusjson" style="font-size: 0.6em; margin-top: 0px">
 Loading...
         </pre>
     </div>
     <div id="logTab" class="tabcontent">
-      <p style="margin: 0px;  color: darkgoldenrod">Current server message log...</p>
-      <pre id="showlog"></pre>
+      <p style="margin: 0px;  color: #b8860b">Current server message log...</p>
+      <span id="showLogHeader" style="margin: 0px;  color: #b8860b; font-size: 0.6em;"></span>
+      <pre id="showlog" style="font-size: 0.6em; margin-top: 0px"></pre>
     </div>
     <div id="rebootTab" class="tabcontent">
-      <p style="margin: 0px; color: darkgoldenrod">Messages logged immediately before last user requested reboot or reset...</p>
-      <pre id="rebootlog"></pre>
+      <p style="margin: 0px; color: darkgoldenrod">Messages logged immediately before last user requested reboot or
+        reset...</p>
+      <pre id="rebootlog" style="font-size: 0.6em; margin-top: 0px"></pre>
     </div>
     <div id="crashTab" class="tabcontent">
       <p style="margin: 0px; color: darkgoldenrod">Messages logged immediately before last system crash...</p>
-      <span id="crashlog-timestamps"></span>
-      <pre id="crashlog"></pre>
+      <pre id="crashlog" style="font-size: 0.6em; margin-top: 0px"></pre>
     </div>
     <!-- Footer section of page ------------------------------------------------------------------>
     <div class="footer" style="flex: 0 1 0;">
       <p style="margin:0px;">For documentation and support see the <a
-          href="https://github.com/ratgdo/homekit-ratgdo">GitHub</a>
-        page.<br>Copyright (c) 2023-24 <a
-          href="https://github.com/ratgdo/homekit-ratgdo/graphs/contributors">homekit-ratgdo
+          href="https://github.com/ratgdo/homekit-ratgdo32">GitHub</a>
+        page.<br>Copyright (c) 2024-25 <a
+          href="https://github.com/ratgdo/homekit-ratgdo32/graphs/contributors">homekit-ratgdo
           contributors.</a><br>Licensed under terms of the <a
           href="https://www.gnu.org/licenses/gpl-3.0.en.html">GPL-3.0
           License.</a>

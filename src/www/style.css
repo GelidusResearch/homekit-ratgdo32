@@ -1,7 +1,7 @@
 /*************************************************************
  * Stylesheet for RATDGO web status page
- * 
- * Copyright (c) 2023-24 David Kerr, https://github.com/dkerr64
+ *
+ * Copyright (c) 2023-25 David Kerr, https://github.com/dkerr64
  *
  *************************************************************/
 
@@ -40,6 +40,24 @@ input[type="radio"],
 input[type="checkbox"] {
     vertical-align: middle;
     accent-color: darkgoldenrod;
+    margin: 0px;
+}
+
+input[type="checkbox"][disabled] {
+    cursor: not-allowed;
+}
+
+.button-row input[type="button"] {
+    padding-left: 0px;
+    padding-right: 0px;
+}
+
+
+input[type="file"]::-webkit-file-upload-button:active,
+input[type="file"]::file-selector-button:active,
+input[type="button"]:active {
+    background-color: rgba(184, 135, 11, 0.75);
+    transform: scale(0.95);
 }
 
 input.slider {
@@ -110,9 +128,11 @@ div {
 }
 
 div.serverstatus {
-    width: 75%;
+    width: 100%;
     overflow: hidden;
     position: relative;
+    padding-left: 0px;
+    padding-right: 0px;
 
     td:nth-child(1) {
         text-align: right;
@@ -121,9 +141,10 @@ div.serverstatus {
 
 div.qrcode {
     width: 25%;
+    left: 75%;
     max-width: 200px;
     overflow: hidden;
-    position: relative;
+    position: absolute;
 }
 
 div.fullwidth {
@@ -153,6 +174,7 @@ div.header {
     padding-bottom: 5px;
 }
 
+div.logspage,
 div.fullpage {
     margin: auto;
     max-width: 800px;
@@ -216,6 +238,15 @@ td {
     vertical-align: top;
 }
 
+table {
+    border-collapse: collapse;
+}
+
+table.password,
+table.settings {
+    border-collapse: unset;
+}
+
 table.settings td,
 table.settings label,
 table.password td,
@@ -229,10 +260,11 @@ table.settings td.IPlabel,
 table.password td.label {
     vertical-align: middle;
     text-align: right;
-    font-size: 0.9em;
+    font-size: 0.8em;
 }
 
-table.settings input.TZinput,
+table.settings select.TZinput,
+table.settings select.FCinput,
 table.settings input.IPinput {
     font-size: 0.9em;
 }
@@ -375,6 +407,12 @@ div.logheader {
     }
 }
 
+@media only screen and (max-width: 659px) {
+    div.logspage {
+        border-radius: 0 0 40px 40px;
+    }
+}
+
 @media only screen and (min-width: 660px) {
     body {
         font-size: 19.8px;
@@ -428,6 +466,11 @@ div.logheader {
         color: black;
     }
 
+    input[type="checkbox"][disabled]+label {
+        color: rgba(0, 0, 0, 0.5);
+        cursor: not-allowed;
+    }
+
     div.footer,
     a {
         color: #505050;
@@ -453,6 +496,11 @@ div.logheader {
         background-color: #202020;
         border-color: #E0E0E0;
         color: white;
+    }
+
+    input[type="checkbox"][disabled]+label {
+        color: rgba(255, 255, 255, 0.5);
+        cursor: not-allowed;
     }
 
     div.footer,

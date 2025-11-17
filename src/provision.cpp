@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -23,10 +23,13 @@
 
 // RATGDO project includes
 #include "ratgdo.h"
+#include "config.h"
 #include "provision.h"
 #include "softAP.h"
-#include "config.h"
-#include "utilities.h"
+#include "serialCLI.h"
+#ifdef ESP8266
+#include "wifi_8266.h"
+#endif
 
 // Logger tag
 static const char *TAG = "ratgdo-improv";
@@ -48,13 +51,28 @@ void blink_led(int d, int times)
 
 void setup_improv()
 {
-    RINFO(TAG, "Disable HomeSpan logging and serial port input");
+#ifdef USE_HOMESPAN
+    ESP_LOGI(TAG, "Enable Improv for WiFi provisioning. Disable HomeSpan serial logging and CLI. Return to HomeSpan CLI with command 'c' or 'C'");
     // This is necessary so as not to interfere with Improv use of serial port
     homeSpan.setLogLevel(-1);
     homeSpan.setSerialInputDisable(true);
-
+#else
+    ESP_LOGI(TAG, "Enable Improv for WiFi provisioning");
+#endif
     blink_led(100, 5);
     improv_setup_done = true;
+    return;
+}
+
+void disable_improv()
+{
+    improv_setup_done = false;
+    suppressSerialLog = false;
+#ifdef USE_HOMESPAN
+    ESP_LOGI(TAG, "Enable HomeSpan logging and serial CLI. Return to RATGDO CLI with command '@c' or '@C'");
+    homeSpan.setLogLevel(0);
+    homeSpan.setSerialInputDisable(false);
+#endif
     return;
 }
 
@@ -110,26 +128,6 @@ void set_error(improv::Error error)
     Serial.write(data.data(), data.size());
 }
 
-bool connectWifi(std::string ssid, std::string password)
-{
-    uint8_t count = 0;
-
-    WiFi.begin(ssid.c_str(), password.c_str());
-
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        blink_led(500, 1); // this delays 2x500 for each blink
-        if (count > MAX_ATTEMPTS_WIFI_CONNECTION)
-        {
-            WiFi.disconnect();
-            return false;
-        }
-        count++;
-    }
-
-    return true;
-}
-
 std::vector<std::string> getLocalUrl()
 {
     return {
@@ -149,8 +147,17 @@ void getAvailableWifiNetworks()
         if (currentSSID != net.ssid)
         {
             currentSSID = net.ssid;
-            std::vector<uint8_t> data = improv::build_rpc_response(
-                improv::GET_WIFI_NETWORKS, {net.ssid, String(net.rssi), (net.encryptionType == WIFI_AUTH_OPEN ? "NO" : "YES")}, false);
+#ifdef ESP8266
+            std::vector<uint8_t> data = improv::build_rpc_response(improv::GET_WIFI_NETWORKS,
+                                                                   {net.ssid, String(net.rssi),
+                                                                    (net.encryptionType == AUTH_OPEN ? "NO" : "YES")},
+                                                                   false);
+#else
+            std::vector<uint8_t> data = improv::build_rpc_response(improv::GET_WIFI_NETWORKS,
+                                                                   {net.ssid, String(net.rssi),
+                                                                    (net.encryptionType == WIFI_AUTH_OPEN ? "NO" : "YES")},
+                                                                   false);
+#endif
             send_response(data);
             delay(1);
         }
@@ -163,6 +170,17 @@ void getAvailableWifiNetworks()
 
 void onErrorCallback(improv::Error err)
 {
+    ESP_LOGE(TAG, "ERROR: %d ", (int)err);
+#ifdef ESP8266
+    // Save current logs in case needed for future analysis
+    File file = LittleFS.open(REBOOT_LOG_MSG_FILE, "w");
+    ratgdoLogger->printMessageLog(file);
+    file.close();
+    LittleFS.end();
+#else
+    // Save current logs in case needed for future analysis
+    ratgdoLogger->saveMessageLog();
+#endif
     blink_led(2000, 3);
 }
 
@@ -171,21 +189,27 @@ bool onCommandCallback(improv::ImprovCommand cmd)
     // As soon as we recognize an Improv command we must suppress any logging
     // to serial port so as not to interfere with Improv comms.
     // Reset only on reboot.
-    suppressSerialLog = true;
-
+    if (!suppressSerialLog)
+    {
+        ESP_LOGI(TAG, "Suppress logs to serial port");
+        suppressSerialLog = true;
+    }
     switch (cmd.command)
     {
     case improv::Command::GET_CURRENT_STATE:
     {
+        ESP_LOGI(TAG, "Command GET_CURRENT_STATE");
         if ((WiFi.status() == WL_CONNECTED))
         {
             set_state(improv::State::STATE_PROVISIONED);
             std::vector<uint8_t> data = improv::build_rpc_response(improv::GET_CURRENT_STATE, getLocalUrl(), false);
             send_response(data);
+            ESP_LOGI(TAG, "STATE_PROVISIONED");
         }
         else
         {
             set_state(improv::State::STATE_AUTHORIZED);
+            ESP_LOGI(TAG, "STATE_AUTHORIZED");
         }
 
         break;
@@ -193,6 +217,7 @@ bool onCommandCallback(improv::ImprovCommand cmd)
 
     case improv::Command::WIFI_SETTINGS:
     {
+        ESP_LOGI(TAG, "Command WIFI_SETTINGS for SSID: %s", cmd.ssid.c_str());
         if (cmd.ssid.length() == 0)
         {
             set_error(improv::Error::ERROR_INVALID_RPC);
@@ -201,12 +226,18 @@ bool onCommandCallback(improv::ImprovCommand cmd)
 
         set_state(improv::STATE_PROVISIONING);
 
-        if (connectWifi(cmd.ssid, cmd.password))
+        if (connect_wifi(cmd.ssid.c_str(), cmd.password.c_str()))
         {
 
             blink_led(100, 3);
-
+#ifdef USE_HOMESPAN
             homeSpan.setWifiCredentials(cmd.ssid.c_str(), cmd.password.c_str());
+#else
+            WiFi.persistent(true); // Set persist to store wifi credentials
+            // Call begin with connect = false because we are allready connected in fn connect_wifi()
+            WiFi.begin(cmd.ssid.c_str(), cmd.password.c_str(), 0, NULL, false);
+            WiFi.persistent(false); // clear the persist flag so other settings do not get written to flash
+#endif
             userConfig->set(cfg_staticIP, false);
             userConfig->set(cfg_wifiPower, WIFI_POWER_MAX);
             userConfig->set(cfg_wifiPhyMode, 0);
@@ -229,6 +260,18 @@ bool onCommandCallback(improv::ImprovCommand cmd)
 
     case improv::Command::GET_DEVICE_INFO:
     {
+        ESP_LOGI(TAG, "Command GET_DEVICE_INFO");
+#ifdef ESP8266
+        std::vector<std::string> infos = {
+            // Firmware name
+            "HomeKit-ratgdo",
+            // Firmware version
+            AUTO_VERSION,
+            // Hardware chip/variant
+            "ESP8266",
+            // Device name
+            "Ratgdo"};
+#else
         std::vector<std::string> infos = {
             // Firmware name
             "HomeKit-ratgdo32",
@@ -238,6 +281,7 @@ bool onCommandCallback(improv::ImprovCommand cmd)
             "ESP32",
             // Device name
             "Ratgdo32"};
+#endif
         std::vector<uint8_t> data = improv::build_rpc_response(improv::GET_DEVICE_INFO, infos, false);
         send_response(data);
         break;
@@ -261,23 +305,50 @@ bool onCommandCallback(improv::ImprovCommand cmd)
 
 void improv_loop()
 {
-    static uint8_t x_buffer[16];
-    static uint8_t x_position = 0;
-
     if (!improv_setup_done)
         return;
 
-    if (Serial.available() > 0)
+    while (Serial.available() > 0)
     {
+        static uint8_t x_buffer[128];
+        static uint8_t x_position = 0;
         uint8_t b = Serial.read();
 
         if (improv::parse_improv_serial_byte(x_position, b, x_buffer, onCommandCallback, onErrorCallback))
         {
-            x_buffer[x_position++] = b;
+            if (x_position >= sizeof(x_buffer))
+            {
+                ESP_LOGE(TAG, "Buffer overrun error");
+                x_position = 0;
+                set_error(improv::ERROR_UNKNOWN);
+            }
+            else
+            {
+                x_buffer[x_position++] = b;
+            }
         }
         else
         {
+            // Not Improv so handle single character commands (followed by a carrage return)
+            static uint8_t cmd = 0;
+            if (x_position == 0 && cmd == 0 && b > 0x20)
+            {
+                // Remember the character
+                cmd = b;
+                continue;
+            }
+            else if (b != '\r')
+            {
+                // Not a carrage return, so ignore and continue
+                x_position = 0;
+                cmd = 0;
+                continue;
+            }
+
+            // Received one character and a carrage return, handle as a command.
+            serialCLI(cmd);
             x_position = 0;
+            cmd = 0;
         }
     }
 }

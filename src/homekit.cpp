@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -14,25 +14,313 @@
  *
  */
 
-// C/C++ language includes
-
-// ESP system includes
+#ifdef ESP8266
+#include <arduino_homekit_server.h>
+#include <ESP8266WiFi.h>
+#endif // ESP8266
 
 // RATGDO project includes
 #include "ratgdo.h"
 #include "config.h"
 #include "comms.h"
-#include "utilities.h"
 #include "homekit.h"
 #include "web.h"
 #include "softAP.h"
 #include "led.h"
+#include "provision.h"
+
+#ifdef RATGDO32_DISCO
 #include "vehicle.h"
+#endif
+#ifdef USE_GDOLIB
+#include "gdo.h"
+#else
 #include "drycontact.h"
+#endif
 
 // Logger tag
 static const char *TAG = "ratgdo-homekit";
+char qrPayload[21];
+bool homekit_setup_done = false;
 
+#ifdef ESP8266
+// Forward-declare setters used by characteristics
+homekit_value_t current_door_state_get();
+homekit_value_t target_door_state_get();
+void target_door_state_set(const homekit_value_t new_value);
+homekit_value_t obstruction_detected_get();
+homekit_value_t current_lock_state_get();
+homekit_value_t target_lock_state_get();
+void target_lock_state_set(const homekit_value_t new_value);
+homekit_value_t light_state_get();
+void light_state_set(const homekit_value_t value);
+
+#else // not ESP8266
+
+static bool rebooting = false;
+static bool isPaired = false;
+
+#endif // ESP8266
+
+#ifdef CRASH_DEBUG
+extern void delayFnCall(uint32_t ms, void (*callback)());
+void testDelayFn(const char *buf)
+{
+    delayFnCall(5000, (void (*)())NULL);
+}
+#endif // CRASH_DEBUG
+
+/****************************************************************************
+ * Convert a decimal number to base62 (so can use A-Za-z0-9 to represent it.
+ */
+char *toBase62(char *base62, size_t len, uint32_t base10)
+{
+    static const char base62Chars[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    size_t i = 0;
+    // Will pad with zeros until base62 buffer filled (to len)
+    while ((base10 > 0) || (i < len - 1))
+    {
+        base62[i++] = base62Chars[base10 % 62];
+        base10 /= 62;
+    }
+    // null terminate
+    base62[i] = 0;
+    // Now reverse order of the string;
+    char *str = base62;
+    char *end = str + strlen(str) - 1;
+    while (str < end)
+    {
+        *str ^= *end;
+        *end ^= *str;
+        *str ^= *end;
+        str++;
+        end--;
+    }
+    return base62;
+}
+
+#ifdef ESP8266
+/****************************************************************************
+ * On ESP8266 we use the Arduino HomeKit library.  On ESP32 we use HomeSpan library
+ * This requires completely separate initialization and runtime handling.
+ *
+ * If making a change to any of the common functions, be sure to check whether
+ * the change is required in both implementations.
+ */
+
+void homekit_event(homekit_event_t event)
+{
+    static bool reset_comms = false;
+    switch (event)
+    {
+    case homekit_event_t::HOMEKIT_EVENT_SERVER_INITIALIZED:
+    {
+        ESP_LOGI(TAG, "HomeKit Server Initialized");
+        break;
+    }
+    case homekit_event_t::HOMEKIT_EVENT_CLIENT_CONNECTED:
+    {
+        if (!homekit_is_paired())
+        {
+            ESP_LOGI(TAG, "Client connected... not paired yet");
+            // During pairing process suspend the GDO comms loop.  This improves reliability of pairing on ESP8266
+            if (comms_setup_done)
+            {
+                ESP_LOGD(TAG, "Disable comms loop while pairing");
+                comms_setup_done = false;
+                reset_comms = true;
+            }
+            // comms loop will be enabled again on any other HomeKit event.
+            return;
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Client connected... paired");
+        }
+        break;
+    }
+    case homekit_event_t::HOMEKIT_EVENT_CLIENT_VERIFIED:
+    {
+        ESP_LOGI(TAG, "Client verified");
+        break;
+    }
+    case homekit_event_t::HOMEKIT_EVENT_CLIENT_DISCONNECTED:
+    {
+        ESP_LOGI(TAG, "Client disconnected");
+        break;
+    }
+    case homekit_event_t::HOMEKIT_EVENT_PAIRING_ADDED:
+    {
+        ESP_LOGI(TAG, "Pairing added");
+        break;
+    }
+    case homekit_event_t::HOMEKIT_EVENT_PAIRING_REMOVED:
+    {
+        ESP_LOGI(TAG, "Pairing removed");
+        break;
+    }
+    default:
+    {
+        ESP_LOGI(TAG, "Server unknown event: %d", event);
+        break;
+    }
+    } // end switch
+    if (reset_comms)
+    {
+        ESP_LOGD(TAG, "Re-enable comms loop");
+        comms_setup_done = true;
+        reset_comms = false;
+    }
+}
+
+/****************************************************************************
+ * Setup HomeKit, non-HomeSpan version.
+ */
+void setup_homekit()
+{
+    ESP_LOGI(TAG, "=== Starting HomeKit Server");
+    String macAddress = WiFi.macAddress();
+    snprintf_P(serial_number, SERIAL_NAME_SIZE, PSTR("%s"), macAddress.c_str());
+
+    current_door_state.getter = current_door_state_get;
+    target_door_state.getter = target_door_state_get;
+    target_door_state.setter = target_door_state_set;
+    obstruction_detected.getter = obstruction_detected_get;
+    current_lock_state.getter = current_lock_state_get;
+    target_lock_state.getter = target_lock_state_get;
+    target_lock_state.setter = target_lock_state_set;
+    light_state.getter = light_state_get;
+    light_state.setter = light_state_set;
+
+    // Generate a QR Code ID from our MAC address, which should create unique pairing QR codes
+    // for each of multiple devices on a network... although we do have to clip to 4 characters,
+    // so we loose ~2 most significant bits.
+    uint8_t mac[WL_MAC_ADDR_LENGTH];
+    WiFi.macAddress(mac);
+    uint32_t uid = (mac[3] << 16) + (mac[4] << 8) + mac[5];
+    static char HKpassword[] = "251-02-023"; // On Oct 25, 2023, Chamberlain announced they were disabling API
+                                             // access for "unauthorized" third parties.
+    static char setupID[6];
+    toBase62(setupID, sizeof(setupID), uid); // always includes leading zeros
+    // setupID will be string "0ABCD" plus null terminator.  We throw away the first char.
+    ESP_LOGI(TAG, "HomeKit pairing QR Code ID: %s", &setupID[1]);
+    // X-HM://0042WZMX3 + setupID... string is constant, precalculated from 25102023
+    // and Category::GarageDoorOpeners in the HomeSpan version of setup code.
+    strlcpy(qrPayload, "X-HM://0042WZMX3", sizeof(qrPayload));
+    sprintf(&qrPayload[16], "%-4.4s", &setupID[1]);
+    ESP_LOGI(TAG, "HomeKit QR setup payload: %s", qrPayload);
+    config.password = HKpassword;
+    config.setupId = &setupID[1];
+    config.on_event = homekit_event;
+
+    garage_door.has_motion_sensor = (bool)read_door_int(nvram_has_motion);
+    if (!garage_door.has_motion_sensor && (userConfig->getMotionTriggers() == 0))
+    {
+        ESP_LOGI(TAG, "Motion Sensor not detected.  Disabling Service");
+        config.accessories[0]->services[3] = NULL;
+    }
+    if (userConfig->getGDOSecurityType() == 3)
+    {
+        ESP_LOGI(TAG, "Dry contact does not support light control.  Disabling Service");
+        config.accessories[0]->services[2] = NULL;
+    }
+
+    arduino_homekit_setup(&config);
+    homekit_setup_done = true;
+}
+
+void homekit_loop()
+{
+    if (!homekit_setup_done && !comms_status_done)
+        return;
+
+    arduino_homekit_loop();
+}
+
+homekit_value_t current_door_state_get()
+{
+    // We cannot sent an illegal value to HomeKit, subsititute with value in valid range
+    GarageDoorCurrentState state = (garage_door.current_state == 0xFF) ? CURR_CLOSED : garage_door.current_state;
+    ESP_LOGD(TAG, "Get current door state: %s", DOOR_STATE(state));
+    return HOMEKIT_UINT8_CPP(state);
+}
+
+homekit_value_t target_door_state_get()
+{
+    // We cannot sent an illegal value to HomeKit, subsititute with value in valid range
+    GarageDoorTargetState state = (garage_door.target_state == 0xFF) ? TGT_CLOSED : garage_door.target_state;
+    ESP_LOGD(TAG, "Get target door state: %s", DOOR_STATE(state));
+    return HOMEKIT_UINT8_CPP(state);
+}
+
+void target_door_state_set(const homekit_value_t value)
+{
+    ESP_LOGD(TAG, "Set door state: %s", DOOR_STATE(value.uint8_value));
+    switch (value.uint8_value)
+    {
+    case TGT_OPEN:
+        open_door();
+        break;
+    case TGT_CLOSED:
+        close_door();
+        break;
+    default:
+        ERROR("invalid target door state set requested: %d", value.uint8_value);
+        break;
+    }
+}
+
+homekit_value_t obstruction_detected_get()
+{
+    ESP_LOGD(TAG, "Get obstruction: %s", (garage_door.obstructed) ? "Obstructed" : "Clear");
+    return HOMEKIT_BOOL_CPP(garage_door.obstructed);
+}
+
+homekit_value_t current_lock_state_get()
+{
+    // We cannot sent an illegal value to HomeKit, subsititute with value in valid range
+    LockCurrentState state = (garage_door.current_lock == 0xFF) ? LockCurrentState::CURR_UNKNOWN : garage_door.current_lock;
+    ESP_LOGD(TAG, "Get current lock state: %s", LOCK_STATE(state));
+    return HOMEKIT_UINT8_CPP(state);
+}
+
+homekit_value_t target_lock_state_get()
+{
+    // We cannot sent an illegal value to HomeKit, subsititute with value in valid range
+    LockTargetState state = (garage_door.target_lock == 0xFF) ? LockTargetState::TGT_UNLOCKED : garage_door.target_lock;
+    ESP_LOGD(TAG, "Get target lock state: %s", LOCK_STATE(state));
+    return HOMEKIT_UINT8_CPP(state);
+}
+
+void target_lock_state_set(const homekit_value_t value)
+{
+    ESP_LOGD(TAG, "Set lock state: %d", LOCK_STATE(value.uint8_value));
+    set_lock(value.uint8_value);
+}
+
+homekit_value_t light_state_get()
+{
+    ESP_LOGD(TAG, "Get light state: %s", garage_door.light ? "On" : "Off");
+    return HOMEKIT_BOOL_CPP(garage_door.light);
+}
+
+void light_state_set(const homekit_value_t value)
+{
+    ESP_LOGD(TAG, "Set light: %s", value.bool_value ? "On" : "Off");
+    set_light(value.bool_value);
+}
+
+#else // not ESP8266, must be ESP32
+
+/****************************************************************************
+ * On ESP32 we use HomeSpan library, this requires completely separate
+ * initialization and runtime handling.
+ *
+ * If making a change to any of the common functions, be sure to check whether
+ * the change is required in both implementations.
+ */
+
+// Declare the HomeKit accessories
 static DEV_GarageDoor *door;
 static DEV_Light *light;
 static DEV_Motion *motion;
@@ -40,38 +328,145 @@ static DEV_Motion *arriving;
 static DEV_Motion *departing;
 static DEV_Occupancy *vehicle;
 static DEV_Light *assistLaser;
+static DEV_Occupancy *roomOccupancy;
 
-static bool isPaired = false;
-static bool rebooting = false;
+// Buffer to hold all IPv6 addresses as a single string
+char ipv6_addresses[LWIP_IPV6_NUM_ADDRESSES * IP6ADDR_STRLEN_MAX] = {0};
 
 /****************************************************************************
  * Callback functions, notify us of significant events
  */
-void wifiCallbackAll(int count)
+void wifiBegin(const char *ssid, const char *pw)
+{
+    if (strEmptyOrSpaces(ssid))
+    {
+        ESP_LOGE(TAG, "ERROR: Invalid SSID value (%s) boot into soft access point mode", ssid);
+        userConfig->set(cfg_softAPmode, true);
+        ESP8266_SAVE_CONFIG();
+        sync_and_restart();
+        return;
+    }
+
+    ESP_LOGI(TAG, "Wifi begin for SSID: %s", ssid);
+    WiFi.setSleep(WIFI_PS_NONE); // Improves performance, at cost of power consumption
+    WiFi.hostname(const_cast<char *>(device_name_rfc952));
+    if (userConfig->getEnableIPv6())
+    {
+        // Enable IPv6 support
+        WiFi.enableIPv6();
+    }
+    if (userConfig->getStaticIP())
+    {
+        IPAddress ip;
+        IPAddress gw;
+        IPAddress nm;
+        IPAddress dns;
+        if (ip.fromString(userConfig->getLocalIP()) &&
+            gw.fromString(userConfig->getGatewayIP()) &&
+            nm.fromString(userConfig->getSubnetMask()) &&
+            dns.fromString(userConfig->getNameserverIP()))
+        {
+            ESP_LOGI(TAG, "Set static IP: %s, Mask: %s, Gateway: %s, DNS: %s",
+                     ip.toString().c_str(), nm.toString().c_str(), gw.toString().c_str(), dns.toString().c_str());
+            WiFi.config(ip, gw, nm, dns);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Failed to set static IP address, error parsing addresses");
+        }
+    }
+    WiFi.begin(ssid, pw);
+
+    // Setting power has to be after WiFi.begin()
+    if (userConfig->getWifiPower() < 20)
+    {
+        // Only set WiFi power if set to less than the maximum
+        // Our range is 1..20, ESP32 range is 8..84
+        wifi_power_t wifiPower = (wifi_power_t)std::min(84, std::max(8, (int)(userConfig->getWifiPower() * 4)));
+        if (WiFi.setTxPower(wifiPower))
+        {
+            ESP_LOGI(TAG, "Setting WiFi TX power to %d", wifiPower);
+        }
+        else
+        {
+            ESP_LOGW(TAG, "Failed to set user requested WiFi TX power");
+        }
+    }
+    ESP_LOGI(TAG, "WiFi TX power: %d", (int)WiFi.getTxPower());
+}
+
+void connectionCallback(int count)
 {
     if (rebooting)
         return;
 
-    RINFO(TAG, "WiFi established, count: %d, IP: %s, Mask: %s, Gateway: %s, DNS: %s", count, WiFi.localIP().toString().c_str(),
-          WiFi.subnetMask().toString().c_str(), WiFi.gatewayIP().toString().c_str(), WiFi.dnsIP().toString().c_str());
+    ESP_LOGI(TAG, "WiFi established, count: %d, IP: %s, Mask: %s, Gateway: %s, DNS: %s",
+             count,
+             WiFi.localIP().toString().c_str(),
+             WiFi.subnetMask().toString().c_str(),
+             WiFi.gatewayIP().toString().c_str(),
+             WiFi.dnsIP().toString().c_str());
+    ESP_LOGI(TAG, "WiFi SSID %s at %ddBm on channel %d to access point %s", WiFi.SSID().c_str(), WiFi.RSSI(), WiFi.channel(), WiFi.BSSIDstr().c_str());
+
+    if (softAPmode)
+        return;
+
+    // IPv4 Config
     userConfig->set(cfg_localIP, WiFi.localIP().toString().c_str());
     userConfig->set(cfg_gatewayIP, WiFi.gatewayIP().toString().c_str());
     userConfig->set(cfg_subnetMask, WiFi.subnetMask().toString().c_str());
-    userConfig->set(cfg_nameserverIP, WiFi.dnsIP().toString().c_str());
-    // With FiFi connected, we can now initialize the rest of our app.
-    if (!softAPmode)
+
+    // Only update cfg_nameserverIP if it is an IPv4 address. .dnsIP() can return an IPv6 address if we have one from SLAAC
+    if (WiFi.dnsIP().type() == IPv4)
+        userConfig->set(cfg_nameserverIP, WiFi.dnsIP().toString().c_str());
+
+    // With WiFi connected, we can now initialize the rest of our app.
+#ifdef USE_GDOLIB
+    // start communications with garage door opener
+    // for some unknown reason we need to start GDOLIB comms from this callback and
+    // not in our regular loop.
+    setup_comms();
+#endif
+    wifi_got_ip = true;
+}
+
+void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+    if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP6)
     {
-        if (userConfig->getTimeZone() == "")
+        // Got IPv6 address
+        ESP_LOGI(TAG, "Received IPv6 Address: %s", IPAddress(IPv6, reinterpret_cast<uint8_t *>(info.got_ip6.ip6_info.ip.addr), info.got_ip6.ip6_info.ip.zone).toString(true).c_str());
+
+        // Now build string of IPv6 addresses
+        ipv6_addresses[0] = '\0'; // Clear the buffer
+        if (userConfig->getEnableIPv6())
         {
-            get_auto_timezone();
+            esp_ip6_addr_t if_ip6[LWIP_IPV6_NUM_ADDRESSES];
+            int nIPv6 = esp_netif_get_all_preferred_ip6(WiFi.STA.netif(), if_ip6);
+            ESP_LOGI(TAG, "Total IPv6 addresses: %d", nIPv6);
+
+            for (int i = 0; i < nIPv6; i++)
+            {
+                String addrStr = IPAddress(IPv6, reinterpret_cast<uint8_t *>(if_ip6[i].addr), if_ip6[i].zone).toString();
+                ESP_LOGI(TAG, "  %s", addrStr.c_str());
+                // Append to buffer, separated by comma if not first
+                if (i > 0)
+                {
+                    strlcat(ipv6_addresses, ",", sizeof(ipv6_addresses));
+                }
+                strlcat(ipv6_addresses, addrStr.c_str(), sizeof(ipv6_addresses));
+            }
         }
-        setup_vehicle();
-        setup_comms();
-        setup_drycontact();
-        setup_web();
     }
-    // beep on completing startup.
-    tone(BEEPER_PIN, 2000, 500);
+    else if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP)
+    {
+        // Got IPv4 address
+        ESP_LOGI(TAG, "Received IPv4 Address: %s", IPAddress(info.got_ip.ip_info.ip.addr).toString().c_str());
+    }
+    else
+    {
+        ESP_LOGI(TAG, "WiFi event: %s (unhandled)", WiFi.eventName(event));
+    }
 }
 
 void statusCallback(HS_STATUS status)
@@ -79,80 +474,113 @@ void statusCallback(HS_STATUS status)
     switch (status)
     {
     case HS_WIFI_NEEDED:
-        RINFO(TAG, "Status: No WiFi Credentials, need to provision");
+        ESP_LOGI(TAG, "Status: No WiFi Credentials, need to provision");
         break;
     case HS_WIFI_CONNECTING:
-        RINFO(TAG, "Status: WiFi connecting, set hostname: %s", device_name_rfc952);
-        // HomeSpan has notcalled WiFi.begin() yet, so we can set options here.
-        WiFi.setSleep(WIFI_PS_NONE); // Improves performance, at cost of power consumption
-        WiFi.hostname((const char *)device_name_rfc952);
-        if (userConfig->getStaticIP())
-        {
-            IPAddress ip;
-            IPAddress gw;
-            IPAddress nm;
-            IPAddress dns;
-            if (ip.fromString(userConfig->getLocalIP().c_str()) &&
-                gw.fromString(userConfig->getGatewayIP().c_str()) &&
-                nm.fromString(userConfig->getSubnetMask().c_str()) &&
-                dns.fromString(userConfig->getNameserverIP().c_str()))
-            {
-                RINFO(TAG, "Set static IP: %s, Mask: %s, Gateway: %s, DNS: %s",
-                      ip.toString().c_str(), nm.toString().c_str(), gw.toString().c_str(), dns.toString().c_str());
-                WiFi.config(ip, gw, nm, dns);
-            }
-            else
-            {
-                RINFO(TAG, "Failed to set static IP address, error parsing addresses");
-            }
-        }
+        ESP_LOGI(TAG, "Status: WiFi connecting");
+        // Monitor IP address events, so we can show user IPv6 addresses
+        WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP6);
+        WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
         break;
     case HS_PAIRING_NEEDED:
-        RINFO(TAG, "Status: Need to pair");
+        ESP_LOGI(TAG, "Status: Need to pair");
         isPaired = false;
         break;
     case HS_PAIRED:
-        RINFO(TAG, "Status: Paired");
+        ESP_LOGI(TAG, "Status: Paired");
         isPaired = true;
         break;
     case HS_REBOOTING:
         rebooting = true;
-        RINFO(TAG, "Status: Rebooting");
+        shutdown_comms();
+        ESP_LOGI(TAG, "Status: Rebooting");
         break;
     case HS_FACTORY_RESET:
-        RINFO(TAG, "Status: Factory Reset");
+        ESP_LOGI(TAG, "Status: Factory Reset");
+        break;
+    case HS_WIFI_SCANNING:
+        ESP_LOGI(TAG, "Status: WiFi Scanning");
         break;
     default:
-        RINFO(TAG, "HomeSpan Status: %s", homeSpan.statusString(status));
+        ESP_LOGI(TAG, "HomeSpan Status: %s", homeSpan.statusString(status));
         break;
     }
 }
 
-#ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
-void printTaskInfo(const char *buf)
-{
-    int count = uxTaskGetNumberOfTasks();
-    TaskStatus_t *tasks = (TaskStatus_t *)pvPortMalloc(sizeof(TaskStatus_t) * count);
-    if (tasks != NULL)
-    {
-        uxTaskGetSystemState(tasks, count, NULL);
-        Serial.printf("-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n");
-        for (size_t i = 0; i < count; i++)
-        {
-            Serial.printf("%s\t%s\t%d\t\t%d\n", (char *)tasks[i].pcTaskName,
-                          strlen((char *)tasks[i].pcTaskName) > 7 ? "" : "\t",
-                          (int)tasks[i].uxBasePriority, (int)tasks[i].usStackHighWaterMark);
-        }
-        Serial.printf("-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n\n");
-    }
-    vPortFree(tasks);
-};
-#endif
-
 /****************************************************************************
- * Initialize HomeKit (with HomeSpan)
+ * Functions called from HomeSpan CLI that provide ratgdo specific
+ * diagnostic info.  Used in setup_homekit()
  */
 
+void printLogInfo(const char *buf)
+{
+    ratgdoLogger->printMessageLog(Serial);
+}
+
+void setLogLevel(const char *buf)
+{
+    long value = 0;
+    char *p = const_cast<char *>(buf);
+    while (*p)
+    {
+        if (isdigit(*p))
+        {
+            value = strtol(p, &p, 10);
+        }
+        else
+        {
+            p++;
+        }
+    }
+    if (value >= 0 && value <= 5)
+    {
+        Serial.printf("Set log level to %d\n", value);
+        userConfig->set(cfg_logLevel, (int)value);
+        esp_log_level_set("*", (esp_log_level_t)userConfig->getLogLevel());
+    }
+    else
+    {
+        Serial.print("Invalid log level, value must be between 0(none) and 5(verbose)\n");
+    }
+}
+
+void enableImprov(const char *buf)
+{
+    userConfig->set(cfg_homespanCLI, false);
+    setup_improv();
+}
+
+#ifdef USE_GDOLIB
+void testMoveDoor(const char *buf)
+{
+    long value = 0;
+    char *p = const_cast<char *>(buf);
+    while (*p)
+    {
+        if (isdigit(*p))
+        {
+            value = strtol(p, &p, 10);
+        }
+        else
+        {
+            p++;
+        }
+    }
+    if (value >= 0 && value <= 100)
+    {
+        Serial.printf("Move door to: %d%\n", value);
+        gdo_door_move_to_target(value * 100);
+    }
+    else
+    {
+        Serial.print("Invalid door postion, value must be between 0(open) and 100(closed)\n");
+    }
+}
+#endif // USE_GDOLIB
+
+/****************************************************************************
+ * HomeKit accessory enable functions (with HomeSpan)
+ */
 void createMotionAccessories()
 {
 
@@ -161,81 +589,170 @@ void createMotionAccessories()
         return;
 
     // Define the Motion Sensor accessory...
-    new SpanAccessory();
+    new SpanAccessory(HOMEKIT_AID_MOTION);
     new DEV_Info("Motion");
     motion = new DEV_Motion("Motion");
 }
 
-void createVehicleAccessories()
+#ifdef RATGDO32_DISCO
+void enable_service_homekit_vehicle(bool enable)
 {
-    // Exit if already setup
-    if (arriving)
-        return;
-
-    // Define Motion Sensor accessory for vehicle arriving
-    new SpanAccessory();
-    new DEV_Info("Arriving");
-    arriving = new DEV_Motion("Arriving");
-
-    // Define Motion Sensor accessory for vehicle departing
-    new SpanAccessory();
-    new DEV_Info("Departing");
-    departing = new DEV_Motion("Departing");
-
-    // Define Motion Sensor accessory for vehicle occupancy (parked or away)
-    new SpanAccessory();
-    new DEV_Info("Vehicle");
-    vehicle = new DEV_Occupancy();
-
-    // Define Light accessory for parking assist laser
-    new SpanAccessory();
-    new DEV_Info("Laser");
-    assistLaser = new DEV_Light(Light_t::ASSIST_LASER);
-}
-
-void enable_service_homekit_vehicle()
-{
-    // only create if not already created
-    if (!garage_door.has_distance_sensor)
+    if (enable)
     {
-        nvRam->write(nvram_has_distance, 1);
-        garage_door.has_distance_sensor = true;
-        createVehicleAccessories();
+        if (!vehicle) // using "vehicle" as proxy for all three motion sensors
+        {
+            // Define Motion Sensor accessory for vehicle arriving
+            new SpanAccessory(HOMEKIT_AID_ARRIVING);
+            new DEV_Info("Arriving");
+            arriving = new DEV_Motion("Arriving");
+            // Define Motion Sensor accessory for vehicle departing
+            new SpanAccessory(HOMEKIT_AID_DEPARTING);
+            new DEV_Info("Departing");
+            departing = new DEV_Motion("Departing");
+
+            // Define Motion Sensor accessory for vehicle occupancy (parked or away)
+            new SpanAccessory(HOMEKIT_AID_VEHICLE);
+            new DEV_Info("Vehicle");
+            vehicle = new DEV_Occupancy();
+
+            homeSpan.updateDatabase();
+        }
     }
+    else if (vehicle) // using "vehicle" as proxy for all three motion sensors
+    {
+        // Delete the accessories, if they exists
+        ESP_LOGI(TAG, "Deleting HomeKit Motion and Occupancy Accessories for vehicle presense");
+        homeSpan.deleteAccessory(HOMEKIT_AID_VEHICLE);
+        vehicle = nullptr;
+        homeSpan.deleteAccessory(HOMEKIT_AID_ARRIVING);
+        arriving = nullptr;
+        homeSpan.deleteAccessory(HOMEKIT_AID_DEPARTING);
+        departing = nullptr;
+
+        homeSpan.updateDatabase();
+    }
+
+    enable_service_homekit_laser(userConfig->getLaserEnabled() && userConfig->getLaserHomeKit());
 }
 
+bool enable_service_homekit_laser(bool enable)
+{
+    if (enable)
+    {
+        if (!assistLaser && userConfig->getLaserEnabled() && userConfig->getLaserHomeKit())
+        {
+            // Define Light accessory for parking assist laser
+            // Create only if not already created, and user config requires it.
+            new SpanAccessory(HOMEKIT_AID_LASER);
+            new DEV_Info("Laser");
+            assistLaser = new DEV_Light(Light_t::ASSIST_LASER);
+            homeSpan.updateDatabase();
+            return true;
+        }
+    }
+    else if (assistLaser)
+    {
+        // Delete the accessory, if it exists
+        ESP_LOGI(TAG, "Deleting HomeKit Light Switch for Laser");
+        if (homeSpan.deleteAccessory(HOMEKIT_AID_LASER))
+        {
+            assistLaser = nullptr;
+            homeSpan.updateDatabase();
+            return true;
+        }
+    }
+    return false;
+}
+#endif
+
+bool enable_service_homekit_room_occupancy(bool enable)
+{
+    // Only enable room occupancy if we have a motion sensor as well
+    if (enable && motion)
+    {
+        if (!roomOccupancy)
+        {
+            // Define the Room Occupancy Sensor accessory...
+            new SpanAccessory(HOMEKIT_AID_ROOM_OCCUPANCY);
+            new DEV_Info("Room Occupancy");
+            roomOccupancy = new DEV_Occupancy();
+            return true;
+        }
+    }
+    else if (roomOccupancy)
+    {
+        // Delete the accessory, if it exists
+        ESP_LOGI(TAG, "Deleting HomeKit Occupancy Sensor accessory");
+        if (homeSpan.deleteAccessory(HOMEKIT_AID_ROOM_OCCUPANCY))
+        {
+            roomOccupancy = nullptr;
+            homeSpan.updateDatabase();
+            garage_door.room_occupied = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+/****************************************************************************
+ * Setup HomeKit, HomeSpan version.
+ */
 void setup_homekit()
 {
-    RINFO(TAG, "=== Setup HomeKit accessories and services ===");
+    if (homekit_setup_done || softAPmode)
+        return;
 
-    homeSpan.setLogLevel(0);
+    ESP_LOGI(TAG, "=== Setup HomeKit accessories and services ===");
+
+    // homeSpan.setLogLevel(0); Zero is default (top level messages only), comment out so can be controlled by Improv setup.
     homeSpan.setSketchVersion(AUTO_VERSION);
     homeSpan.setHostNameSuffix("");
     homeSpan.setPortNum(5556);
     // We will manage LED flashing ourselves
     // homeSpan.setStatusPin(LED_BUILTIN);
-
     homeSpan.enableAutoStartAP();
     homeSpan.setApFunction(start_soft_ap);
 
-    homeSpan.setQRID("RTGO");
+    // Generate a QR Code ID from our MAC address, which should create unique pairing QR codes
+    // for each of multiple devices on a network... although we do have to clip to 4 characters,
+    // so we loose ~2 most significant bits.
+    uint8_t mac[6];
+    Network.macAddress(mac);
+    uint32_t uid = (mac[3] << 16) + (mac[4] << 8) + mac[5];
+    char setupID[6];
+    toBase62(setupID, sizeof(setupID), uid); // always includes leading zeros
+    ESP_LOGI(TAG, "HomeKit pairing QR Code ID: %s", &setupID[1]);
+    HapQR qrCode;
+    strlcpy(qrPayload, qrCode.get((uint32_t)25102023, &setupID[1], (uint8_t)Category::GarageDoorOpeners), sizeof(qrPayload));
+    ESP_LOGI(TAG, "HomeKit QR setup payload: %s", qrPayload);
+    homeSpan.setQRID(&setupID[1]);
     homeSpan.setPairingCode("25102023"); // On Oct 25, 2023, Chamberlain announced they were disabling API
                                          // access for "unauthorized" third parties.
-
-    homeSpan.setWifiCallbackAll(wifiCallbackAll);
+    homeSpan.setWifiBegin(wifiBegin);
+    homeSpan.setConnectionCallback(connectionCallback);
     homeSpan.setStatusCallback(statusCallback);
 
     homeSpan.begin(Category::Bridges, device_name, device_name_rfc952, "ratgdo-ESP32");
 
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
-    new SpanUserCommand('t', "print FreeRTOS task info", printTaskInfo);
+    new SpanUserCommand('t', "- print FreeRTOS task info", printTaskInfo);
 #endif
+    new SpanUserCommand('l', "- print RATGDO buffered message log", printLogInfo);
+    new SpanUserCommand('d', "<level> - set ESP log level 0(none), 1(error), 2(warn), 3(info), 4(debug), 5(verbose)", setLogLevel);
+#ifdef USE_GDOLIB
+    new SpanUserCommand('m', "<percent> - move door to position between 0(open) and 100 (closed)", testMoveDoor);
+#endif
+#ifdef CRASH_DEBUG
+    new SpanUserCommand('z', "- test function", testDelayFn);
+#endif
+    new SpanUserCommand('C', "switch to RATGDO CLI (and enable Improv WiFi provisioning)", enableImprov);
+
     // Define a bridge (as more than 3 accessories)
-    new SpanAccessory();
+    new SpanAccessory(HOMEKIT_AID_BRIDGE);
     new DEV_Info(default_device_name);
 
     // Define the Garage Door accessory...
-    new SpanAccessory();
+    new SpanAccessory(HOMEKIT_AID_GARAGE_DOOR);
     new DEV_Info(device_name);
     new Characteristic::Manufacturer("Ratcloud llc");
     new Characteristic::SerialNumber(Network.macAddress().c_str());
@@ -247,47 +764,52 @@ void setup_homekit()
     if (userConfig->getGDOSecurityType() != 3)
     {
         // Define the Light accessory...
-        new SpanAccessory();
+        new SpanAccessory(HOMEKIT_AID_LIGHT_BULB);
         new DEV_Info("Light");
         light = new DEV_Light();
     }
     else
     {
-        RINFO(TAG, "Dry contact mode. Disabling light switch service");
+        ESP_LOGI(TAG, "Dry contact mode. Disabling light switch service");
     }
 
     // only create motion if we know we have motion sensor(s)
-    garage_door.has_motion_sensor = (bool)nvRam->read(nvram_has_motion);
+    garage_door.has_motion_sensor = (bool)read_door_int(nvram_has_motion);
     if (garage_door.has_motion_sensor || userConfig->getMotionTriggers() != 0)
     {
         createMotionAccessories();
     }
     else
     {
-        RINFO(TAG, "No motion sensor. Skipping motion service");
+        ESP_LOGI(TAG, "No motion sensor. Skipping motion service");
     }
 
+#ifdef RATGDO32_DISCO
     // only create sensors if we know we have time-of-flight distance sensor
-    garage_door.has_distance_sensor = (bool)nvRam->read(nvram_has_distance);
+    garage_door.has_distance_sensor = (bool)read_door_int(nvram_has_distance);
     if (garage_door.has_distance_sensor)
     {
-        createVehicleAccessories();
+        enable_service_homekit_vehicle(userConfig->getVehicleHomeKit());
     }
     else
     {
-        RINFO(TAG, "No vehicle presence sensor. Skipping motion and occupancy services");
+        ESP_LOGI(TAG, "No vehicle presence sensor. Skipping motion and occupancy services");
     }
+#endif
+    // Create a room occupancy sensor if timer for it is greater than 0
+    enable_service_homekit_room_occupancy(userConfig->getOccupancyDuration() > 0);
 
     // Auto poll starts up a new FreeRTOS task to do the HomeKit comms
     // so no need to handle in our Arduino loop.
     homeSpan.autoPoll((1024 * 16), 1, 0);
+    homekit_setup_done = true;
 }
 
 void queueSendHelper(QueueHandle_t q, GDOEvent e, const char *txt)
 {
     if (!q || xQueueSend(q, &e, 0) == errQUEUE_FULL)
     {
-        RERROR(TAG, "Could not queue homekit notify of %s state: %d", txt, e.value.u);
+        ESP_LOGE(TAG, "Could not queue homekit notify of %s state: %d", txt, e.value.u);
     }
 }
 
@@ -297,11 +819,6 @@ void homekit_unpair()
         return;
 
     homeSpan.processSerialCommand("U");
-}
-
-bool homekit_is_paired()
-{
-    return isPaired;
 }
 
 /****************************************************************************
@@ -315,10 +832,11 @@ DEV_Info::DEV_Info(const char *name) : Service::AccessoryInformation()
 
 boolean DEV_Info::update()
 {
-    RINFO(TAG, "Request to identify accessory, flash LED, etc.");
+    ESP_LOGI(TAG, "Request to identify accessory, flash LED, etc.");
     // LED, Laser and Tone calls are all asynchronous.  We will illuminate LED and Laser
     // for 2 seconds, during which we will play tone.  Function will return after 1.5 seconds.
     led.flash(2000);
+#ifdef RATGDO32_DISCO
     laser.flash(2000);
     tone(BEEPER_PIN, 1300);
     delay(500);
@@ -327,77 +845,17 @@ boolean DEV_Info::update()
     tone(BEEPER_PIN, 1300);
     delay(500);
     tone(BEEPER_PIN, 2000, 500);
+#endif
     return true;
 }
 
 /****************************************************************************
  * Garage Door Service Handler
  */
-void notify_homekit_target_door_state_change()
-{
-    if (!isPaired)
-        return;
-
-    GDOEvent e;
-    e.c = door->target;
-    e.value.u = garage_door.target_state;
-    queueSendHelper(door->event_q, e, "target door");
-}
-
-void notify_homekit_current_door_state_change()
-{
-    // Notify the vehicle presence code that door state is changing
-    if (garage_door.current_state == GarageDoorCurrentState::CURR_OPENING)
-        doorOpening();
-    if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSING)
-        doorClosing();
-
-    if (!isPaired)
-        return;
-
-    GDOEvent e;
-    e.c = door->current;
-    e.value.u = garage_door.current_state;
-    queueSendHelper(door->event_q, e, "current door");
-}
-
-void notify_homekit_target_lock()
-{
-    if (!isPaired)
-        return;
-
-    GDOEvent e;
-    e.c = door->lockTarget;
-    e.value.u = garage_door.target_lock;
-    queueSendHelper(door->event_q, e, "target lock");
-}
-
-void notify_homekit_current_lock()
-{
-    if (!isPaired)
-        return;
-
-    GDOEvent e;
-    e.c = door->lockCurrent;
-    e.value.u = garage_door.current_lock;
-    queueSendHelper(door->event_q, e, "current lock");
-}
-
-void notify_homekit_obstruction()
-{
-    if (!isPaired)
-        return;
-
-    GDOEvent e;
-    e.c = door->obstruction;
-    e.value.b = garage_door.obstructed;
-    queueSendHelper(door->event_q, e, "obstruction");
-}
-
 DEV_GarageDoor::DEV_GarageDoor() : Service::GarageDoorOpener()
 {
-    RINFO(TAG, "Configuring HomeKit Garage Door Service");
-    event_q = xQueueCreate(5, sizeof(GDOEvent));
+    ESP_LOGI(TAG, "Configuring HomeKit Garage Door Service");
+    event_q = xQueueCreate(10, sizeof(GDOEvent));
     current = new Characteristic::CurrentDoorState(current->CLOSED);
     target = new Characteristic::TargetDoorState(target->CLOSED);
     obstruction = new Characteristic::ObstructionDetected(obstruction->NOT_DETECTED);
@@ -412,41 +870,19 @@ DEV_GarageDoor::DEV_GarageDoor() : Service::GarageDoorOpener()
         lockCurrent = nullptr;
         lockTarget = nullptr;
     }
-    // We can set current lock state to unknown as HomeKit has value for that.
-    // But we can't do the same for door state as HomeKit has no value for that.
-    garage_door.current_lock = CURR_UNKNOWN;
 }
 
 boolean DEV_GarageDoor::update()
 {
-    if (target->getNewVal() == target->OPEN)
-    {
-        RINFO(TAG, "Opening Garage Door");
-        current->setVal(current->OPENING);
-        obstruction->setVal(false);
-        open_door();
-    }
-    else
-    {
-        RINFO(TAG, "Closing Garage Door");
-        current->setVal(current->CLOSING);
-        obstruction->setVal(false);
-        close_door();
-    }
+    ESP_LOGI(TAG, "Garage Door Characteristics Update, door target: %d", target->getNewVal());
+    GarageDoorCurrentState state = (target->getNewVal() == target->OPEN) ? open_door() : close_door();
+    obstruction->setVal(false);
+    current->setVal(state);
 
     if (userConfig->getGDOSecurityType() != 3)
     {
-        // Dry contact cannot control lock ?
-        if (lockTarget->getNewVal() == lockTarget->LOCK)
-        {
-            RINFO(TAG, "Locking Garage Door Remotes");
-            set_lock(lockTarget->LOCK);
-        }
-        else
-        {
-            RINFO(TAG, "Unlocking Garage Door Remotes");
-            set_lock(lockTarget->UNLOCK);
-        }
+        // Dry contact cannot control lock
+        set_lock(lockTarget->getNewVal() == lockTarget->LOCK);
     }
     return true;
 }
@@ -458,17 +894,17 @@ void DEV_GarageDoor::loop()
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
         if (e.c == current)
-            RINFO(TAG, "Garage door set CurrentDoorState: %d", e.value.u);
+            ESP_LOGI(TAG, "Set current door state: %s", DOOR_STATE(e.value.u));
         else if (e.c == target)
-            RINFO(TAG, "Garage door set TargetDoorState: %d", e.value.u);
+            ESP_LOGI(TAG, "Set target door state: %s", DOOR_STATE(e.value.u));
         else if (e.c == obstruction)
-            RINFO(TAG, "Garage door set ObstructionDetected: %d", e.value.u);
+            ESP_LOGI(TAG, "Set obstruction: %s", e.value.u ? "Obstructed" : "Clear");
         else if (e.c == lockCurrent)
-            RINFO(TAG, "Garage door set LockCurrentState: %d", e.value.u);
+            ESP_LOGI(TAG, "Set current lock state: %s", LOCK_STATE(e.value.u));
         else if (e.c == lockTarget)
-            RINFO(TAG, "Garage door set LockTargetState: %d", e.value.u);
+            ESP_LOGI(TAG, "Set target lock state: %s", LOCK_STATE(e.value.u));
         else
-            RINFO(TAG, "Garage door set Unknown: %d", e.value.u);
+            ESP_LOGI(TAG, "Set Unknown: %d", e.value.u);
         e.c->setVal(e.value.u);
     }
 }
@@ -476,34 +912,14 @@ void DEV_GarageDoor::loop()
 /****************************************************************************
  * Light Service Handler
  */
-void notify_homekit_light()
-{
-    if (!isPaired || !light)
-        return;
-
-    GDOEvent e;
-    e.value.b = garage_door.light;
-    queueSendHelper(light->event_q, e, "light");
-}
-
-void notify_homekit_laser(bool on)
-{
-    if (!isPaired || !assistLaser)
-        return;
-
-    GDOEvent e;
-    e.value.b = on;
-    queueSendHelper(assistLaser->event_q, e, "laser");
-}
-
 DEV_Light::DEV_Light(Light_t type) : Service::LightBulb()
 {
     DEV_Light::type = type;
     if (type == Light_t::GDO_LIGHT)
-        RINFO(TAG, "Configuring HomeKit Light Service for GDO Light");
+        ESP_LOGI(TAG, "Configuring HomeKit Light Service for GDO Light");
     else if (type == Light_t::ASSIST_LASER)
-        RINFO(TAG, "Configuring HomeKit Light Service for Laser");
-    event_q = xQueueCreate(5, sizeof(GDOEvent));
+        ESP_LOGI(TAG, "Configuring HomeKit Light Service for Laser");
+    event_q = xQueueCreate(10, sizeof(GDOEvent));
     DEV_Light::on = new Characteristic::On(DEV_Light::on->OFF);
 }
 
@@ -511,22 +927,23 @@ boolean DEV_Light::update()
 {
     if (this->type == Light_t::GDO_LIGHT)
     {
-        RINFO(TAG, "Turn light %s", on->getNewVal<bool>() ? "on" : "off");
         set_light(DEV_Light::on->getNewVal<bool>());
     }
+#ifdef RATGDO32_DISCO
     else if (this->type == Light_t::ASSIST_LASER)
     {
         if (on->getNewVal<bool>())
         {
-            RINFO(TAG, "Turn parking assist laser on");
+            ESP_LOGI(TAG, "Turn parking assist laser on");
             laser.on();
         }
         else
         {
-            RINFO(TAG, "Turn parking assist laser off");
+            ESP_LOGI(TAG, "Turn parking assist laser off");
             laser.off();
         }
     }
+#endif
     return true;
 }
 
@@ -537,9 +954,9 @@ void DEV_Light::loop()
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
         if (this->type == Light_t::GDO_LIGHT)
-            RINFO(TAG, "Light has turned %s", e.value.b ? "on" : "off");
+            ESP_LOGI(TAG, "Light has turned %s", e.value.b ? "on" : "off");
         else if (this->type == Light_t::ASSIST_LASER)
-            RINFO(TAG, "Parking assist laster has turned %s", e.value.b ? "on" : "off");
+            ESP_LOGI(TAG, "Parking assist laster has turned %s", e.value.b ? "on" : "off");
         DEV_Light::on->setVal(e.value.b);
     }
 }
@@ -547,51 +964,10 @@ void DEV_Light::loop()
 /****************************************************************************
  * Motion Service Handler
  */
-void enable_service_homekit_motion()
-{
-    // only create if not already created
-    if (!garage_door.has_motion_sensor)
-    {
-        nvRam->write(nvram_has_motion, 1);
-        garage_door.has_motion_sensor = true;
-        createMotionAccessories();
-    }
-}
-
-void notify_homekit_motion()
-{
-    if (!isPaired || !motion)
-        return;
-
-    GDOEvent e;
-    e.value.b = garage_door.motion;
-    queueSendHelper(motion->event_q, e, "motion");
-}
-
-void notify_homekit_vehicle_arriving(bool vehicleArriving)
-{
-    if (!isPaired || !arriving)
-        return;
-
-    GDOEvent e;
-    e.value.b = vehicleArriving;
-    queueSendHelper(arriving->event_q, e, "arriving");
-}
-
-void notify_homekit_vehicle_departing(bool vehicleDeparting)
-{
-    if (!isPaired || !departing)
-        return;
-
-    GDOEvent e;
-    e.value.b = vehicleDeparting;
-    queueSendHelper(departing->event_q, e, "departing");
-}
-
 DEV_Motion::DEV_Motion(const char *name) : Service::MotionSensor()
 {
-    RINFO(TAG, "Configuring HomeKit Motion Service for %s", name);
-    event_q = xQueueCreate(5, sizeof(GDOEvent));
+    ESP_LOGI(TAG, "Configuring HomeKit Motion Service for %s", name);
+    event_q = xQueueCreate(10, sizeof(GDOEvent));
     strlcpy(this->name, name, sizeof(this->name));
     DEV_Motion::motion = new Characteristic::MotionDetected(motion->NOT_DETECTED);
 }
@@ -602,7 +978,7 @@ void DEV_Motion::loop()
     {
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
-        RINFO(TAG, "%s %s", name, e.value.b ? "detected" : "reset");
+        ESP_LOGI(TAG, "%s %s", name, e.value.b ? "detected" : "reset");
         DEV_Motion::motion->setVal(e.value.b);
     }
 }
@@ -610,20 +986,10 @@ void DEV_Motion::loop()
 /****************************************************************************
  * Occupancy Service Handler
  */
-void notify_homekit_vehicle_occupancy(bool vehicleDetected)
-{
-    if (!isPaired || !vehicle)
-        return;
-
-    GDOEvent e;
-    e.value.b = vehicleDetected;
-    queueSendHelper(vehicle->event_q, e, "vehicle");
-}
-
 DEV_Occupancy::DEV_Occupancy() : Service::OccupancySensor()
 {
-    RINFO(TAG, "Configuring HomeKit Occupancy Service");
-    event_q = xQueueCreate(5, sizeof(GDOEvent));
+    ESP_LOGI(TAG, "Configuring HomeKit Occupancy Service");
+    event_q = xQueueCreate(10, sizeof(GDOEvent));
     DEV_Occupancy::occupied = new Characteristic::OccupancyDetected(occupied->NOT_DETECTED);
 }
 
@@ -633,7 +999,258 @@ void DEV_Occupancy::loop()
     {
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
-        RINFO(TAG, "Vehicle occupancy %s", e.value.b ? "detected" : "reset");
+        ESP_LOGI(TAG, "%s occupancy %s", (this == vehicle) ? "Vehicle" : "Room", e.value.b ? "detected" : "reset");
         DEV_Occupancy::occupied->setVal(e.value.b);
     }
+}
+
+/****************************************************************************
+ * HomeKit notification functions only for ESP32
+ */
+void notify_homekit_vehicle_occupancy(bool vehicleDetected)
+{
+    if (!isPaired || !vehicle)
+        return;
+
+    GDOEvent e;
+    e.c = nullptr;
+    e.value.b = vehicleDetected;
+    queueSendHelper(vehicle->event_q, e, "vehicle");
+}
+
+void notify_homekit_room_occupancy(bool occupied)
+{
+    if (!isPaired || !roomOccupancy)
+        return;
+
+    GDOEvent e;
+    e.c = nullptr;
+    e.value.b = garage_door.room_occupied = occupied;
+    garage_door.room_occupancy_timeout = (!occupied) ? 0 : _millis() + userConfig->getOccupancyDuration() * 1000; // convert seconds to milliseconds
+    queueSendHelper(roomOccupancy->event_q, e, "room occupancy");
+}
+
+void notify_homekit_laser(bool on)
+{
+    if (!isPaired || !assistLaser)
+        return;
+
+    GDOEvent e;
+    e.c = nullptr;
+    e.value.b = on;
+    queueSendHelper(assistLaser->event_q, e, "laser");
+}
+
+void notify_homekit_vehicle_arriving(bool vehicleArriving)
+{
+    if (!isPaired || !arriving)
+        return;
+
+    GDOEvent e;
+    e.c = nullptr;
+    e.value.b = vehicleArriving;
+    queueSendHelper(arriving->event_q, e, "arriving");
+}
+
+void notify_homekit_vehicle_departing(bool vehicleDeparting)
+{
+    if (!isPaired || !departing)
+        return;
+
+    GDOEvent e;
+    e.c = nullptr;
+    e.value.b = vehicleDeparting;
+    queueSendHelper(departing->event_q, e, "departing");
+}
+
+// on ESP8266 this is provided by the Arduino HomeKit library
+bool homekit_is_paired()
+{
+    return isPaired;
+}
+#endif // ESP8266
+
+/****************************************************************************
+ * HomeKit notification functions common to both ESP8266 and ESP32
+ */
+void notify_homekit_target_door_state_change(GarageDoorTargetState state)
+{
+    garage_door.target_state = state;
+    // Ignore invalid states
+    if (state == 0xFF)
+        return;
+#ifdef ESP32
+    if (!isPaired)
+        return;
+
+    GDOEvent e;
+    e.c = door->target;
+    e.value.u = (uint8_t)garage_door.target_state;
+    queueSendHelper(door->event_q, e, "target door");
+#else
+    if (!arduino_homekit_get_running_server())
+        return;
+
+    homekit_characteristic_notify(&target_door_state, HOMEKIT_UINT8_CPP(garage_door.target_state));
+#endif
+}
+
+void notify_homekit_current_door_state_change(GarageDoorCurrentState state)
+{
+    garage_door.current_state = state;
+    // Ignore invalid states
+    if (state == 0xFF)
+        return;
+#ifdef ESP32
+    if (!isPaired)
+        return;
+
+    GDOEvent e;
+    e.c = door->current;
+    e.value.u = (uint8_t)garage_door.current_state;
+    queueSendHelper(door->event_q, e, "current door");
+
+#ifdef RATGDO32_DISCO
+    // Notify the vehicle presence code that door state is changing
+    if (garage_door.current_state == GarageDoorCurrentState::CURR_OPENING)
+        doorOpening();
+    if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSING)
+        doorClosing();
+#endif
+#else
+    if (!arduino_homekit_get_running_server())
+        return;
+
+    homekit_characteristic_notify(&current_door_state, HOMEKIT_UINT8_CPP(garage_door.current_state));
+#endif
+}
+
+void notify_homekit_target_lock(LockTargetState state)
+{
+    garage_door.target_lock = state;
+    // Ignore invalid states
+    if (state == 0xFF)
+        return;
+#ifdef ESP32
+    if (!isPaired)
+        return;
+
+    GDOEvent e;
+    e.c = door->lockTarget;
+    e.value.u = (uint8_t)garage_door.target_lock;
+    queueSendHelper(door->event_q, e, "target lock");
+#else
+    if (!arduino_homekit_get_running_server())
+        return;
+
+    homekit_characteristic_notify(&target_lock_state, HOMEKIT_UINT8_CPP(garage_door.target_lock));
+#endif
+}
+
+void notify_homekit_current_lock(LockCurrentState state)
+{
+    garage_door.current_lock = state;
+    // Ignore invalid states
+    if (state == 0xFF)
+        return;
+#ifdef ESP32
+    if (!isPaired)
+        return;
+
+    GDOEvent e;
+    e.c = door->lockCurrent;
+    e.value.u = (uint8_t)garage_door.current_lock;
+    queueSendHelper(door->event_q, e, "current lock");
+#else
+    if (!arduino_homekit_get_running_server())
+        return;
+
+    homekit_characteristic_notify(&current_lock_state, HOMEKIT_UINT8_CPP(garage_door.current_lock));
+#endif
+}
+
+void notify_homekit_obstruction(bool state)
+{
+    garage_door.obstructed = state;
+#ifdef ESP32
+    if (!isPaired)
+        return;
+
+    GDOEvent e;
+    e.c = door->obstruction;
+    e.value.b = garage_door.obstructed;
+    queueSendHelper(door->event_q, e, "obstruction");
+#else
+    if (!arduino_homekit_get_running_server())
+        return;
+
+    homekit_characteristic_notify(&obstruction_detected, HOMEKIT_BOOL_CPP(garage_door.obstructed));
+#endif
+}
+
+void notify_homekit_light(bool state)
+{
+    garage_door.light = state;
+#ifdef ESP32
+    if (!isPaired || !light)
+        return;
+
+    GDOEvent e;
+    e.c = nullptr;
+    e.value.b = garage_door.light;
+    queueSendHelper(light->event_q, e, "light");
+#else
+    if (!arduino_homekit_get_running_server())
+        return;
+
+    homekit_characteristic_notify(&light_state, HOMEKIT_BOOL_CPP(garage_door.light));
+#endif
+}
+
+void enable_service_homekit_motion(bool reboot)
+{
+#ifdef ESP32
+    // only create if not already created
+    if (!garage_door.has_motion_sensor)
+    {
+        write_door_int(nvram_has_motion, 1);
+        garage_door.has_motion_sensor = true;
+        createMotionAccessories();
+        if (reboot)
+        {
+            sync_and_restart();
+        }
+    }
+#else
+    write_door_int(nvram_has_motion, 1);
+    if (reboot)
+    {
+        sync_and_restart();
+    }
+#endif
+}
+
+void notify_homekit_motion(bool state)
+{
+    garage_door.motion = state;
+#ifdef ESP32
+    garage_door.motion_timer = (!state) ? 0 : _millis() + MOTION_TIMER_DURATION;
+    if (!isPaired || !motion)
+        return;
+
+    GDOEvent e;
+    e.c = nullptr;
+    e.value.b = garage_door.motion;
+    queueSendHelper(motion->event_q, e, "motion");
+#else
+    garage_door.motion_timer = (!state) ? 0 : _millis() + MOTION_TIMER_DURATION;
+    if (!arduino_homekit_get_running_server())
+        return;
+
+    homekit_characteristic_notify(&motion_detected, HOMEKIT_BOOL_CPP(garage_door.motion));
+#endif
+#ifndef ESP8266
+    if (state)
+        notify_homekit_room_occupancy(true);
+#endif
 }
