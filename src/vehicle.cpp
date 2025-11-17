@@ -14,7 +14,7 @@
 
 // Arduino includes
 #include <Wire.h>
-#include <vl53l4cx_class.h>
+#include <vl53l1x_class.h>
 #include "Ticker.h"
 
 // RATGDO project includes
@@ -29,7 +29,7 @@ static const char *TAG = "ratgdo-vehicle";
 bool vehicle_setup_done = false;
 bool vehicle_setup_error = false;
 
-VL53L4CX distanceSensor(&Wire, SENSOR_SHUTDOWN_PIN);
+VL53L1X distanceSensor(&Wire, SENSOR_SHUTDOWN_PIN);
 
 static const int MIN_DISTANCE = 25;   // ignore bugs crawling on the distance sensor
 static const int MAX_DISTANCE = 4500; // 4.5 meters, maximum range of the sensor
@@ -63,39 +63,53 @@ void calculatePresence(int16_t distance);
 
 void setup_vehicle()
 {
-    VL53L4CX_Error rc = VL53L4CX_ERROR_NONE;
+    uint8_t status = 0;
 
     if (vehicle_setup_done || vehicle_setup_error)
         return;
 
-    ESP_LOGI(TAG, "=== Setup VL53L4CX time-of-flight sensor ===");
+    ESP_LOGI(TAG, "=== Setup VL53L1X time-of-flight sensor ===");
 
     if (!Wire.begin(SENSOR_SDA_PIN, SENSOR_SCL_PIN))
     {
-        ESP_LOGE(TAG, "VL53L4CX pin setup failed");
+        ESP_LOGE(TAG, "VL53L1X pin setup failed");
         vehicle_setup_error = true;
         return;
     }
     distanceSensor.begin();
-    distanceSensor.VL53L4CX_Off();
-    rc = distanceSensor.InitSensor(0x59);
-    if (rc != VL53L4CX_ERROR_NONE)
+    distanceSensor.VL53L1X_Off();
+    status = distanceSensor.InitSensor(0x52);
+    if (status != 0)
     {
-        ESP_LOGE(TAG, "VL53L4CX failed to initialize error: %d", rc);
+        ESP_LOGE(TAG, "VL53L1X failed to initialize error: %d", status);
         vehicle_setup_error = true;
         return;
     }
-    rc = distanceSensor.VL53L4CX_SetDistanceMode(VL53L4CX_DISTANCEMODE_LONG);
-    if (rc != VL53L4CX_ERROR_NONE)
+    status = distanceSensor.VL53L1X_SetDistanceMode(2); // 2 = Long distance mode (up to 4m)
+    if (status != 0)
     {
-        ESP_LOGE(TAG, "VL53L4CX_SetDistanceMode error: %d", rc);
+        ESP_LOGE(TAG, "VL53L1X_SetDistanceMode error: %d", status);
         vehicle_setup_error = true;
         return;
     }
-    rc = distanceSensor.VL53L4CX_StartMeasurement();
-    if (rc != VL53L4CX_ERROR_NONE)
+    status = distanceSensor.VL53L1X_SetTimingBudgetInMs(100); // Set timing budget to 100ms
+    if (status != 0)
     {
-        ESP_LOGE(TAG, "VL53L4CX_StartMeasurement error: %d", rc);
+        ESP_LOGE(TAG, "VL53L1X_SetTimingBudgetInMs error: %d", status);
+        vehicle_setup_error = true;
+        return;
+    }
+    status = distanceSensor.VL53L1X_SetInterMeasurementInMs(100); // Set inter-measurement period to 100ms
+    if (status != 0)
+    {
+        ESP_LOGE(TAG, "VL53L1X_SetInterMeasurementInMs error: %d", status);
+        vehicle_setup_error = true;
+        return;
+    }
+    status = distanceSensor.VL53L1X_StartRanging();
+    if (status != 0)
+    {
+        ESP_LOGE(TAG, "VL53L1X_StartRanging error: %d", status);
         vehicle_setup_error = true;
         return;
     }
@@ -113,85 +127,77 @@ void vehicle_loop()
         return;
 
     uint8_t dataReady = 0;
-    VL53L4CX_Error err = VL53L4CX_ERROR_NONE;
-    if (((err = distanceSensor.VL53L4CX_GetMeasurementDataReady(&dataReady)) == VL53L4CX_ERROR_NONE) && (dataReady > 0))
+    uint8_t status = 0;
+    if ((status = distanceSensor.VL53L1X_CheckForDataReady(&dataReady)) == 0 && dataReady > 0)
     {
-        VL53L4CX_MultiRangingData_t distanceData;
-        if ((err = distanceSensor.VL53L4CX_GetMultiRangingData(&distanceData)) == VL53L4CX_ERROR_NONE)
+        uint16_t distance_mm = 0;
+        uint8_t rangeStatus = 0;
+        
+        status = distanceSensor.VL53L1X_GetRangeStatus(&rangeStatus);
+        if (status == 0)
         {
-            if (distanceData.NumberOfObjectsFound > 0)
+            status = distanceSensor.VL53L1X_GetDistance(&distance_mm);
+            if (status == 0)
             {
                 int16_t distance = -1;
-                // Multiple objects could be found. During testing if I wave my hand in front of the
-                // sensor I get two distances... that of my hand, and that of the background.
-                // We will only record the furthest away.
-                for (int i = 0; i < distanceData.NumberOfObjectsFound; i++)
+                
+                // VL53L1X range status codes:
+                // 0: Valid range
+                // 1: Sigma fail (low confidence)
+                // 2: Signal fail  
+                // 4: Out of bounds (phase)
+                // 7: Wraparound
+                switch (rangeStatus)
                 {
-                    // In testing I am seeing range status of 0, 1, 4, 7 and 12.  These represent
-                    // 0:  VL53L4CX_RANGESTATUS_RANGE_VALID
-                    // 1:  VL53L4CX_RANGESTATUS_SIGMA_FAIL
-                    // 4:  VL53L4CX_RANGESTATUS_OUTOFBOUNDS_FAIL
-                    // 7:  VL53L4CX_RANGESTATUS_WRAP_TARGET_FAIL
-                    // 12: VL53L4CX_RANGESTATUS_TARGET_PRESENT_LACK_OF_SIGNAL
-                    // Documentation also suggests that valid data can be returned with:
-                    // 3:  VL53L4CX_RANGESTATUS_RANGE_VALID_MIN_RANGE_CLIPPED
-                    // 6:  VL53L4CX_RANGESTATUS_RANGE_VALID_NO_WRAP_CHECK_FAIL
-                    switch (distanceData.RangeData[i].RangeStatus)
-                    {
-                    case VL53L4CX_RANGESTATUS_TARGET_PRESENT_LACK_OF_SIGNAL:
-                        // Unusual, but docs say that range data is valid.
-                        ESP_LOGV(TAG, "Unusual VL53L4CX Range Status: %d, Range: %dmm", distanceData.RangeData[i].RangeStatus, distanceData.RangeData[i].RangeMilliMeter);
-                        // fall through...
-                    case VL53L4CX_RANGESTATUS_RANGE_VALID:
-                        // The Range is valid.
-                    case VL53L4CX_RANGESTATUS_RANGE_VALID_MIN_RANGE_CLIPPED:
-                        // Target is below minimum detection threshold.
-                    case VL53L4CX_RANGESTATUS_RANGE_VALID_NO_WRAP_CHECK_FAIL:
-                        // The Range is valid but the wraparound check has not been done.
-                        distance = std::max(distance, distanceData.RangeData[i].RangeMilliMeter);
-                        break;
-                    case VL53L4CX_RANGESTATUS_OUTOFBOUNDS_FAIL:
-                        // Target below threshold... assume no object.
-                        ESP_LOGV(TAG, "Vehicle distance out of bounds: %dmm", distanceData.RangeData[i].RangeMilliMeter);
-                        distance = MAX_DISTANCE;
-                        break;
-                    case VL53L4CX_RANGESTATUS_RANGE_INVALID:
-                        // Typically a negative value... we will ignore.
-                        ESP_LOGV(TAG, "Vehicle distance range invalid: %dmm", distanceData.RangeData[i].RangeMilliMeter);
-                        break;
-                    case VL53L4CX_RANGESTATUS_SIGMA_FAIL:
-                        // Sigma fail indicates sensor has low confidence in the range value returned.  Sensor may be pointed at glass.
-                        ESP_LOGW(TAG, "Vehicle distance sensor sigma fail. Sensor may be pointing at glass, try repositioning: %dmm", distanceData.RangeData[i].RangeMilliMeter);
-                        distance = std::max(distance, distanceData.RangeData[i].RangeMilliMeter);
-                        break;
-                    case VL53L4CX_RANGESTATUS_WRAP_TARGET_FAIL:
-                        // Wrapped target - no matching phase in other VCSEL period timing
-                        ESP_LOGV(TAG, "Vehicle distance wrap target fail: %dmm", distanceData.RangeData[i].RangeMilliMeter);
-                        break;
-                    default:
-                        ESP_LOGE(TAG, "Unhandled VL53L4CX Range Status: %d, Range: %dmm", distanceData.RangeData[i].RangeStatus, distanceData.RangeData[i].RangeMilliMeter);
-                        break;
-                    }
+                case 0: // Valid range
+                    distance = distance_mm;
+                    break;
+                case 1: // Sigma fail
+                    ESP_LOGW(TAG, "Vehicle distance sensor sigma fail. Sensor may be pointing at glass, try repositioning: %dmm", distance_mm);
+                    distance = distance_mm; // Use data but with caution
+                    break;
+                case 2: // Signal fail
+                    ESP_LOGV(TAG, "Vehicle distance signal fail: %dmm", distance_mm);
+                    distance = MAX_DISTANCE; // Assume no object
+                    break;
+                case 4: // Out of bounds
+                    ESP_LOGV(TAG, "Vehicle distance out of bounds: %dmm", distance_mm);
+                    distance = MAX_DISTANCE; // Assume no object
+                    break;
+                case 7: // Wraparound
+                    ESP_LOGV(TAG, "Vehicle distance wrap target fail: %dmm", distance_mm);
+                    break;
+                default:
+                    ESP_LOGE(TAG, "Unhandled VL53L1X Range Status: %d, Range: %dmm", rangeStatus, distance_mm);
+                    break;
                 }
-                calculatePresence(distance);
+                
+                if (distance >= 0)
+                {
+                    calculatePresence(distance);
+                }
             }
             else
             {
-                // No objects found, assume maximum range for purpose of calculating vehicle presence.
-                calculatePresence(MAX_DISTANCE);
+                ESP_LOGE(TAG, "VL53L1X_GetDistance reports error: %d", status);
             }
-            // And start the sensor measuring again...
-            distanceSensor.VL53L4CX_ClearInterruptAndStartMeasurement();
         }
         else
         {
-            ESP_LOGE(TAG, "VL53L4CX_GetMultiRangingData reports error: %d", err);
+            ESP_LOGE(TAG, "VL53L1X_GetRangeStatus reports error: %d", status);
+        }
+        
+        // Clear the interrupt
+        status = distanceSensor.VL53L1X_ClearInterrupt();
+        if (status != 0)
+        {
+            ESP_LOGV(TAG, "VL53L1X_ClearInterrupt reports error: %d", status);
         }
     }
     else
     {
-        if (err)
-            ESP_LOGE(TAG, "VL53L4CX_GetMeasurementDataReady reports error: %d", err);
+        if (status != 0)
+            ESP_LOGE(TAG, "VL53L1X_CheckForDataReady reports error: %d", status);
     }
 
     _millis_t current_millis = _millis();
