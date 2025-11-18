@@ -72,19 +72,31 @@ void setup_vehicle()
 
     if (!Wire.begin(SENSOR_SDA_PIN, SENSOR_SCL_PIN))
     {
-        ESP_LOGE(TAG, "VL53L1X pin setup failed");
+        ESP_LOGE(TAG, "VL53L1X I2C pin setup failed");
         vehicle_setup_error = true;
         return;
     }
+    
+    // Initialize sensor
     distanceSensor.begin();
+    
+    // Power off sensor first
     distanceSensor.VL53L1X_Off();
-    status = distanceSensor.InitSensor(0x52);
+    delay(10); // Wait for sensor to power down
+    
+    // Power on sensor
+    distanceSensor.VL53L1X_On();
+    delay(10); // Wait for sensor to power up
+    
+    // Initialize sensor with default I2C address (0x29 in 7-bit, which is 0x52 in 8-bit)
+    status = distanceSensor.InitSensor(0x29 << 1);
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X failed to initialize error: %d", status);
         vehicle_setup_error = true;
         return;
     }
+    
     status = distanceSensor.VL53L1X_SetDistanceMode(2); // 2 = Long distance mode (up to 4m)
     if (status != 0)
     {

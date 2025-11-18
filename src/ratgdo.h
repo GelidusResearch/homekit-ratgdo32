@@ -142,8 +142,14 @@ const gpio_num_t DISCRETE_CLOSE_PIN = GPIO_NUM_25; // alternative (or in additio
 #ifdef RATGDO32_DISCO
 const gpio_num_t BEEPER_PIN = GPIO_NUM_33;
 const gpio_num_t LASER_PIN = GPIO_NUM_23;
-const gpio_num_t SENSOR_SDA_PIN = GPIO_NUM_19;
-const gpio_num_t SENSOR_SCL_PIN = GPIO_NUM_18;
+#ifndef SENSOR_SDA_GPIO
+#define SENSOR_SDA_GPIO GPIO_NUM_19
+#endif
+const gpio_num_t SENSOR_SDA_PIN = (gpio_num_t)SENSOR_SDA_GPIO;
+#ifndef SENSOR_SCL_GPIO
+#define SENSOR_SCL_GPIO GPIO_NUM_18
+#endif
+const gpio_num_t SENSOR_SCL_PIN = (gpio_num_t)SENSOR_SCL_GPIO;
 const gpio_num_t SENSOR_SHUTDOWN_PIN = GPIO_NUM_32;
 #endif
 
