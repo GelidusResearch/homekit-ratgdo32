@@ -70,12 +70,42 @@ void setup_vehicle()
 
     ESP_LOGI(TAG, "=== Setup VL53L1X time-of-flight sensor ===");
 
+#ifdef GRGDO1_V1
+    // GRGDO1 v1: Serial pins conflict with I2C pins, redirect to Serial1
+    Serial1.begin(115200);
+    Serial.end();
+    Serial = Serial1;
+#endif
+
     if (!Wire.begin(SENSOR_SDA_PIN, SENSOR_SCL_PIN))
     {
         ESP_LOGE(TAG, "VL53L1X I2C pin setup failed");
         vehicle_setup_error = true;
+#ifdef GRGDO1_V1
+        // Restore Serial to UART0 for Improv
+        Serial1.end();
+        Serial0.begin(115200);
+        Serial = Serial0;
+#endif
         return;
     }
+    
+    // Check if sensor is present at I2C address 0x29
+    Wire.beginTransmission(0x29);
+    if (Wire.endTransmission() != 0)
+    {
+        ESP_LOGE(TAG, "VL53L1X ToF not detected at address 0x29");
+        Wire.end();
+        vehicle_setup_error = true;
+#ifdef GRGDO1_V1
+        // Restore Serial to UART0 for Improv
+        Serial1.end();
+        Serial0.begin(115200);
+        Serial = Serial0;
+#endif
+        return;
+    }
+    ESP_LOGI(TAG, "VL53L1X ToF detected at address 0x29");
     
     // Initialize sensor
     distanceSensor.begin();
@@ -93,7 +123,14 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X failed to initialize error: %d", status);
+        Wire.end();
         vehicle_setup_error = true;
+#ifdef GRGDO1_V1
+        // Restore Serial to UART0 for Improv
+        Serial1.end();
+        Serial0.begin(115200);
+        Serial = Serial0;
+#endif
         return;
     }
     

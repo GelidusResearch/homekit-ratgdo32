@@ -293,7 +293,13 @@ function setElementsFromStatus(status) {
             tzOptions.timeZone = status.timeZone;
         }
         else {
-            tzOptions.timeZone = status.timeZone.substring(0, i);
+            let tz = status.timeZone.substring(0, i);
+            // Validate timezone - if empty or invalid, use default UTC
+            if (tz && tz !== "undefined") {
+                tzOptions.timeZone = tz;
+            } else {
+                tzOptions.timeZone = "Etc/UTC";
+            }
         }
     }
     for (const [key, value] of Object.entries(status)) {
