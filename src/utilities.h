@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -13,28 +13,40 @@
  *
  */
 #pragma once
+
 // C/C++ language includes
 #include <stdint.h>
+#ifndef ESP8266
 #include <time.h>
-
-// ESP system includes
 #include <esp_timer.h>
+#include <magic_enum.hpp>
+#endif
 
-// RATGDO project includes
-// #include "homekit_decl.h"
-// #include "ratgdo.h"
+#ifdef ESP8266
+typedef uint32_t _millis_t;
+#define _millis() ((_millis_t)millis())
+#define YIELD()                 \
+    do                          \
+    {                           \
+        system_soft_wdt_feed(); \
+        esp_yield();            \
+    } while (0)
+#else
+typedef int64_t _millis_t;
+#define _millis() ((_millis_t)(esp_timer_get_time() / 1000LL))
+#define YIELD() vTaskDelay(1 / portTICK_PERIOD_MS)
+#endif
 
-#ifdef NTP_CLIENT
-extern bool clockSet;
-extern unsigned long lastRebootAt;
+extern time_t clockSet;
+extern uint64_t lastRebootAt;
 extern char *timeString(time_t reqTime = 0, bool syslog = false);
+extern char *toHHMMSSmmm(_millis_t t = _millis());
 extern bool enableNTP;
 extern bool get_auto_timezone();
 #define NTP_SERVER "pool.ntp.org"
-#endif
 
-#ifndef ARDUINO
-#define millis() (esp_timer_get_time() / 1000UL)
+#ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
+extern void printTaskInfo(const char *buf = nullptr);
 #endif
 
 #if defined(MMU_IRAM_HEAP)
@@ -44,18 +56,22 @@ extern bool get_auto_timezone();
 // need to make more space available for initialization.
 #include <umm_malloc/umm_malloc.h>
 #include <umm_malloc/umm_heap_select.h>
-#define IRAM_START \
-    {              \
-        HeapSelectIram ephemeral;
-#define IRAM_END(location)                                                 \
-    RINFO(TAG, "Free IRAM heap (%s): %d", location, ESP.getFreeHeap()); \
+#define IRAM_START(tag)                                                                       \
+    {                                                                                         \
+        HeapSelectIram ephemeral;                                                             \
+        free_iram_at_boot = (free_iram_at_boot == 0) ? ESP.getFreeHeap() : free_iram_at_boot; \
+        ESP_LOGI(tag, "IRAM_START (%s) heap: %d", __func__, ESP.getFreeHeap());
+#define IRAM_END(tag)                                                     \
+    ESP_LOGI(tag, "IRAM_END (%s) heap: %d", __func__, ESP.getFreeHeap()); \
     }
-#else
-#define IRAM_START {
-#define IRAM_END(location)                                            \
-    RINFO(TAG, "Free heap (%s): %d", location, ESP.getFreeHeap()); \
+#else // MMU_IRAM_HEAP
+#define IRAM_START(tag) \
+    {                   \
+        ESP_LOGI(tag, "Start (%s) heap: %d", __func__, ESP.getFreeHeap());
+#define IRAM_END(tag)                                                \
+    ESP_LOGI(tag, "End (%s) heap: %d", __func__, ESP.getFreeHeap()); \
     }
-#endif
+#endif // MMU_IRAM_HEAP
 
 // Controls soft Access Point mode.
 extern bool softAPmode;
@@ -63,8 +79,6 @@ extern bool softAPmode;
 extern const char www_realm[];
 // automatically reboot after X seconds
 extern uint32_t rebootSeconds;
-
-// #define IP_ADDRESS_SIZE 16
 
 // Bitset that identifies what will trigger the motion sensor
 typedef struct
@@ -87,3 +101,4 @@ extern motionTriggersUnion motionTriggers;
 extern void load_all_config_settings();
 extern void sync_and_restart();
 extern char *make_rfc952(char *dest, const char *src, int size);
+extern bool strEmptyOrSpaces(const char *str);

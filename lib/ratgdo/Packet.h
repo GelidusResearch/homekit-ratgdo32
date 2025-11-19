@@ -1,11 +1,14 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
  * Copyright (c) 2023-24 Brandon Matthews... https://github.com/thenewwazoo
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
+ *
+ * Contributions acknowledged from
+ * David Kerr...     https://github.com/dkerr64
  *
  */
 #pragma once
@@ -70,7 +73,7 @@
 //   I named those "unknown" in the Status struct but don't use or print them.
 //
 //   There are many command types that are not implemented here, as they were not necessary for
-//   implmementing HomeKit support. That does not mean I would not like a more-complete
+//   implementing HomeKit support. That does not mean I would not like a more-complete
 //   implementation.
 
 // Tag for union of data structures attached to packets
@@ -82,8 +85,22 @@ enum class PacketDataType
     Lock,
     DoorAction,
     Openings,
+    Battery,
+    SetTtc,
+    CancelTtc,
+    UpdateTtc,
+    Pair2Resp,
+    Pair3Resp,
     Unknown,
 };
+
+// default shift / mask for packets
+const uint8_t LO_BYTE_MASK = 0xFF;
+const uint8_t LO_BYTE_SHIFT = 24;
+const uint8_t HI_BYTE_MASK = 0xFF;
+const uint8_t HI_BYTE_SHIFT = 16;
+const uint8_t FLAG_MASK = 0x0F;
+const uint8_t FLAG_SHIFT = 8;
 
 // Parity is applicable to all incoming packets; outgoing packets leave this unset
 const uint8_t COMMAND_PARITY_MASK = 0b1111;
@@ -113,7 +130,7 @@ struct DoorActionCommandData
     uint8_t id;
 
     DoorActionCommandData() = default;
-    DoorActionCommandData(uint32_t pkt_data)
+    explicit DoorActionCommandData(uint32_t pkt_data)
     {
         action = static_cast<DoorAction>((pkt_data >> DOOR_ACTION_SHIFT) & DOOR_ACTION_MASK);
         parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
@@ -174,10 +191,11 @@ struct LockCommandData
     bool pressed;
 
     LockCommandData() = default;
-    LockCommandData(uint32_t pkt_data)
+    explicit LockCommandData(uint32_t pkt_data)
     {
         lock = static_cast<LockState>((pkt_data >> LOCK_DATA_SHIFT) & LOCK_DATA_MASK);
         parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+        pressed = false;
     };
 
     uint32_t to_data(void)
@@ -230,10 +248,11 @@ struct LightCommandData
     bool pressed;
 
     LightCommandData() = default;
-    LightCommandData(uint32_t pkt_data)
+    explicit LightCommandData(uint32_t pkt_data)
     {
         light = static_cast<LightState>((pkt_data >> LIGHT_DATA_SHIFT) & LIGHT_DATA_MASK);
         parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+        pressed = false;
     };
 
     uint32_t to_data(void)
@@ -301,8 +320,7 @@ struct StatusCommandData
     bool unknown2;
 
     StatusCommandData() = default;
-
-    StatusCommandData(uint32_t pkt_data)
+    explicit StatusCommandData(uint32_t pkt_data)
     {
         door = static_cast<DoorState>((pkt_data >> STATUS_DOOR_STATE_SHIFT) & STATUS_DOOR_STATE_MASK);
         parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
@@ -355,20 +373,24 @@ struct StatusCommandData
     };
 };
 
-const uint8_t GET_OPENINGS_LO_BYTE_MASK = 0xFF;
-const uint8_t GET_OPENINGS_LO_BYTE_SHIFT = 24;
-const uint8_t GET_OPENINGS_HI_BYTE_MASK = 0xFF;
-const uint8_t GET_OPENINGS_HI_BYTE_SHIFT = 16;
+const uint8_t OPENINGS_LO_BYTE_MASK = 0xFF;
+const uint8_t OPENINGS_LO_BYTE_SHIFT = 24;
+const uint8_t OPENINGS_HI_BYTE_MASK = 0xFF;
+const uint8_t OPENINGS_HI_BYTE_SHIFT = 16;
+const uint8_t OPENINGS_FLAG_MASK = 0x0F;
+const uint8_t OPENINGS_FLAG_SHIFT = 8;
 struct OpeningsCommandData
 {
     uint16_t count;
+    uint8_t flags;
     uint8_t parity;
 
     OpeningsCommandData() = default;
-    OpeningsCommandData(uint32_t pkt_data)
+    explicit OpeningsCommandData(uint32_t pkt_data)
     {
-        uint8_t lo = ((pkt_data >> GET_OPENINGS_LO_BYTE_SHIFT) & GET_OPENINGS_LO_BYTE_MASK);
-        uint8_t hi = ((pkt_data >> GET_OPENINGS_HI_BYTE_SHIFT) & GET_OPENINGS_HI_BYTE_MASK);
+        uint8_t lo = ((pkt_data >> OPENINGS_LO_BYTE_SHIFT) & OPENINGS_LO_BYTE_MASK);
+        uint8_t hi = ((pkt_data >> OPENINGS_HI_BYTE_SHIFT) & OPENINGS_HI_BYTE_MASK);
+        flags = ((pkt_data >> OPENINGS_FLAG_SHIFT) & OPENINGS_FLAG_MASK);
         parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
 
         count = hi << 8 | lo;
@@ -379,15 +401,270 @@ struct OpeningsCommandData
         uint32_t pkt_data = 0;
         uint8_t lo = count & 0xFF;
         uint8_t hi = count >> 8;
-        pkt_data |= lo << GET_OPENINGS_LO_BYTE_SHIFT;
-        pkt_data |= hi << GET_OPENINGS_HI_BYTE_SHIFT;
+        pkt_data |= lo << OPENINGS_LO_BYTE_SHIFT;
+        pkt_data |= hi << OPENINGS_HI_BYTE_SHIFT;
         pkt_data |= parity << COMMAND_PARITY_SHIFT;
         return pkt_data;
     };
 
     void to_string(char *buf, size_t buflen)
     {
-        snprintf(buf, buflen, "Openings %02d", count);
+        snprintf(buf, buflen, "Openings %02d, Flags 0x%X, Parity 0x%X", count, flags, parity);
+    };
+};
+
+enum class BatteryState : uint8_t
+{
+    Unknown = 0,
+    Charging = 6,
+    Full = 8,
+};
+
+const uint8_t BATTERY_DATA_MASK = 0xFF;
+const uint8_t BATTERY_DATA_SHIFT = 16;
+struct BatteryCommandData
+{
+    BatteryState state;
+    uint8_t parity;
+
+    BatteryCommandData() = default;
+    explicit BatteryCommandData(uint32_t pkt_data)
+    {
+        state = static_cast<BatteryState>((pkt_data >> BATTERY_DATA_SHIFT) & BATTERY_DATA_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+    };
+
+    uint32_t to_data(void)
+    {
+        uint32_t pkt_data = 0;
+        pkt_data |= static_cast<uint32_t>(state) << BATTERY_DATA_SHIFT;
+        pkt_data |= parity << COMMAND_PARITY_SHIFT;
+        return pkt_data;
+    };
+
+    void to_string(char *buf, size_t buflen)
+    {
+        const char *s = "Invalid command";
+        switch (state)
+        {
+        case BatteryState::Unknown:
+            s = "Unknown";
+            break;
+        case BatteryState::Charging:
+            s = "Charging";
+            break;
+        case BatteryState::Full:
+            s = "Full";
+            break;
+        }
+        snprintf(buf, buflen, "BatteryState %s, Parity 0x%X", s, parity);
+    };
+};
+
+const uint8_t SET_TTC_LO_BYTE_MASK = 0xFF;
+const uint8_t SET_TTC_LO_BYTE_SHIFT = 24;
+const uint8_t SET_TTC_HI_BYTE_MASK = 0xFF;
+const uint8_t SET_TTC_HI_BYTE_SHIFT = 16;
+const uint8_t SET_TTC_FLAG_MASK = 0x0F;
+const uint8_t SET_TTC_FLAG_SHIFT = 8;
+struct SetTtcCommandData
+{
+    uint16_t seconds;
+    uint8_t flags;
+    uint8_t parity;
+
+    SetTtcCommandData() = default;
+    explicit SetTtcCommandData(uint32_t pkt_data)
+    {
+        uint8_t hi = ((pkt_data >> SET_TTC_HI_BYTE_SHIFT) & SET_TTC_HI_BYTE_MASK);
+        uint8_t lo = ((pkt_data >> SET_TTC_LO_BYTE_SHIFT) & SET_TTC_LO_BYTE_MASK);
+        flags = ((pkt_data >> SET_TTC_FLAG_SHIFT) & SET_TTC_FLAG_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+        seconds = hi << 8 | lo;
+    }
+
+    uint32_t to_data(void)
+    {
+        uint32_t pkt_data = 0;
+        uint8_t lo = seconds & 0xFF;
+        uint8_t hi = seconds >> 8;
+        pkt_data |= lo << SET_TTC_LO_BYTE_SHIFT;
+        pkt_data |= hi << SET_TTC_HI_BYTE_SHIFT;
+        pkt_data |= flags << SET_TTC_FLAG_SHIFT;
+        pkt_data |= parity << COMMAND_PARITY_SHIFT;
+        return pkt_data;
+    };
+
+    void to_string(char *buf, size_t buflen)
+    {
+        snprintf(buf, buflen, "Seconds %02d, Flags 0x%X, Parity 0x%X", seconds, flags, parity);
+    };
+};
+
+const uint8_t CANCEL_TTC_BYTE_MASK = 0xFF;
+const uint8_t CANCEL_TTC_BYTE_SHIFT = 16;
+const uint8_t CANCEL_TTC_FLAG_MASK = 0x0F;
+const uint8_t CANCEL_TTC_FLAG_SHIFT = 8;
+enum class CancelTtcState : uint8_t
+{
+    Hold = 4,
+    Cancel = 5,
+};
+struct CancelTtcCommandData
+{
+    CancelTtcState state;
+    uint8_t byte2;
+    uint8_t flags;
+    uint8_t parity;
+
+    CancelTtcCommandData() = default;
+    explicit CancelTtcCommandData(uint32_t pkt_data)
+    {
+        byte2 = ((pkt_data >> LO_BYTE_SHIFT) & LO_BYTE_MASK);
+        state = static_cast<CancelTtcState>((pkt_data >> CANCEL_TTC_BYTE_SHIFT) & CANCEL_TTC_BYTE_MASK);
+        flags = ((pkt_data >> CANCEL_TTC_FLAG_SHIFT) & CANCEL_TTC_FLAG_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+    }
+
+    uint32_t to_data(void)
+    {
+        uint32_t pkt_data = 0;
+        pkt_data |= static_cast<uint32_t>(state) << CANCEL_TTC_BYTE_SHIFT;
+        pkt_data |= flags << CANCEL_TTC_FLAG_SHIFT;
+        pkt_data |= parity << COMMAND_PARITY_SHIFT;
+        return pkt_data;
+    };
+
+    void to_string(char *buf, size_t buflen)
+    {
+        const char *s = "unknown state";
+        switch (state)
+        {
+        case CancelTtcState::Hold:
+            s = "Holding";
+            break;
+        case CancelTtcState::Cancel:
+            s = "Cancel";
+            break;
+        }
+        snprintf(buf, buflen, "State %s, Byte2 0x%02X, Flags 0x%X, Parity 0x%X", s, byte2, flags, parity);
+    };
+};
+
+const uint8_t UPDATE_TTC_LO_BYTE_MASK = 0xFF;
+const uint8_t UPDATE_TTC_LO_BYTE_SHIFT = 24;
+const uint8_t UPDATE_TTC_HI_BYTE_MASK = 0xFF;
+const uint8_t UPDATE_TTC_HI_BYTE_SHIFT = 16;
+const uint8_t UPDATE_TTC_FLAG_MASK = 0x0F;
+const uint8_t UPDATE_TTC_FLAG_SHIFT = 8;
+struct UpdateTtcCommandData
+{
+    uint16_t seconds;
+    uint8_t flags;
+    uint8_t parity;
+
+    UpdateTtcCommandData() = default;
+    explicit UpdateTtcCommandData(uint32_t pkt_data)
+    {
+        uint8_t hi = ((pkt_data >> UPDATE_TTC_HI_BYTE_SHIFT) & UPDATE_TTC_HI_BYTE_MASK);
+        uint8_t lo = ((pkt_data >> UPDATE_TTC_LO_BYTE_SHIFT) & UPDATE_TTC_LO_BYTE_MASK);
+        flags = ((pkt_data >> UPDATE_TTC_FLAG_SHIFT) & UPDATE_TTC_FLAG_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+        seconds = hi << 8 | lo;
+    }
+
+    uint32_t to_data(void)
+    {
+        uint32_t pkt_data = 0;
+        uint8_t lo = seconds & 0xFF;
+        uint8_t hi = seconds >> 8;
+        pkt_data |= lo << UPDATE_TTC_LO_BYTE_SHIFT;
+        pkt_data |= hi << UPDATE_TTC_HI_BYTE_SHIFT;
+        pkt_data |= flags << UPDATE_TTC_FLAG_SHIFT;
+        pkt_data |= parity << COMMAND_PARITY_SHIFT;
+        return pkt_data;
+    };
+
+    void to_string(char *buf, size_t buflen)
+    {
+        snprintf(buf, buflen, "Seconds %02d, Flags 0x%X, Parity 0x%X", seconds, flags, parity);
+    };
+};
+
+struct Pair2RespCommandData
+{
+    uint16_t seconds;
+    uint8_t byte1;
+    uint8_t byte2;
+    uint8_t flags;
+    uint8_t parity;
+
+    Pair2RespCommandData() = default;
+    explicit Pair2RespCommandData(uint32_t pkt_data)
+    {
+        byte1 = ((pkt_data >> HI_BYTE_SHIFT) & HI_BYTE_MASK);
+        byte2 = ((pkt_data >> LO_BYTE_SHIFT) & LO_BYTE_MASK);
+        flags = ((pkt_data >> FLAG_SHIFT) & FLAG_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+        seconds = byte1 << 8 | byte2;
+    }
+
+    void to_string(char *buf, size_t buflen)
+    {
+        snprintf(buf, buflen, "Byte2 0x%02X, Byte1 0x%02X (%02d Seconds), Flags 0x%X, Parity 0x%X", byte2, byte1, seconds, flags, parity);
+    };
+};
+
+enum class Pair3State : uint8_t
+{
+    WallpanelAck = 0x01, // from wall panel ID... when door finished opening (after the Pair3resp 0x02, Pair3 and UpdateTtc)
+    UpdateAck = 0x02,    // door finished opening and there is a TTC active (after a Pair3 and UpdateTtc)
+    CancelAck = 0x09,    // in response to a CancelTtc command AND ALSO when obstruction sensor changes from blocked to clear
+    WarningStart = 0x0b, // TTC expires and door starts warning sequence (and after an UpdateTtc of zero seconds)
+    WarningEnd = 0x0c,   // end of warning sequence and door is about to start closing (6-8 seconds after 0x0B received)
+    ObstBlocked = 0x0e,  // obstruction sensor changes clear to blocked
+};
+struct Pair3RespCommandData
+{
+    uint8_t byte1;
+    uint8_t byte2;
+    uint8_t flags;
+    uint8_t parity;
+
+    Pair3RespCommandData() = default;
+    explicit Pair3RespCommandData(uint32_t pkt_data)
+    {
+        byte1 = ((pkt_data >> HI_BYTE_SHIFT) & HI_BYTE_MASK);
+        byte2 = ((pkt_data >> LO_BYTE_SHIFT) & LO_BYTE_MASK);
+        flags = ((pkt_data >> FLAG_SHIFT) & FLAG_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+    }
+
+    void to_string(char *buf, size_t buflen)
+    {
+        snprintf(buf, buflen, "Byte2 0x%02X, Byte1 0x%02X, Flags 0x%X, Parity 0x%X", byte2, byte1, flags, parity);
+    };
+};
+
+struct UnknownCommandData
+{
+    uint8_t byte1;
+    uint8_t byte2;
+    uint8_t flags;
+    uint8_t parity;
+
+    UnknownCommandData() = default;
+    explicit UnknownCommandData(uint32_t pkt_data)
+    {
+        byte1 = ((pkt_data >> HI_BYTE_SHIFT) & HI_BYTE_MASK);
+        byte2 = ((pkt_data >> LO_BYTE_SHIFT) & LO_BYTE_MASK);
+        flags = ((pkt_data >> FLAG_SHIFT) & FLAG_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+    }
+
+    void to_string(char *buf, size_t buflen)
+    {
+        snprintf(buf, buflen, "Byte2 0x%02X, Byte1 0x%02X, Flags 0x%X, Parity 0x%X", byte2, byte1, flags, parity);
     };
 };
 
@@ -400,7 +677,7 @@ struct NoData
     uint8_t parity;
 
     NoData() = default;
-    NoData(uint32_t pkt_data)
+    explicit NoData(uint32_t pkt_data)
     {
         no_bits_set = pkt_data & ~(COMMAND_PARITY_MASK << COMMAND_PARITY_SHIFT);
         no_bits_set = no_bits_set & ~0xFF; // skip cmd byte
@@ -414,7 +691,7 @@ struct NoData
 
     void to_string(char *buf, size_t buflen)
     {
-        snprintf(buf, buflen, "Zero: 0x%08lX, Parity: 0x%X", no_bits_set, parity);
+        snprintf(buf, buflen, "Zero: 0x%08X, Parity: 0x%X", no_bits_set, parity);
     };
 };
 
@@ -429,6 +706,13 @@ struct PacketData
         LightCommandData light;
         DoorActionCommandData door_action;
         OpeningsCommandData openings;
+        BatteryCommandData battery;
+        SetTtcCommandData set_ttc;
+        CancelTtcCommandData cancel_ttc;
+        UpdateTtcCommandData update_ttc;
+        Pair2RespCommandData pair2resp;
+        Pair3RespCommandData pair3resp;
+        UnknownCommandData unknown;
         uint32_t cmd;
     } value;
 
@@ -462,8 +746,33 @@ struct PacketData
             value.openings.to_string(subbuf, subbuflen);
             snprintf(buf, buflen, "Openings: [%s]", subbuf);
             break;
+        case PacketDataType::Battery:
+            value.battery.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "Battery: [%s]", subbuf);
+            break;
+        case PacketDataType::SetTtc:
+            value.set_ttc.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "SetTtc: [%s]", subbuf);
+            break;
+        case PacketDataType::CancelTtc:
+            value.cancel_ttc.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "CancelTtc: [%s]", subbuf);
+            break;
+        case PacketDataType::UpdateTtc:
+            value.update_ttc.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "UpdateTtc: [%s]", subbuf);
+            break;
+        case PacketDataType::Pair2Resp:
+            value.pair2resp.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "Pair2Resp: [%s]", subbuf);
+            break;
+        case PacketDataType::Pair3Resp:
+            value.pair3resp.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "Pair3Resp: [%s]", subbuf);
+            break;
         case PacketDataType::Unknown:
-            snprintf(buf, buflen, "Unknown: [%03lX]", value.cmd);
+            value.unknown.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "Unknown: [%s]", subbuf);
             break;
         }
     };
@@ -479,6 +788,7 @@ public:
         Status = 0x081,
         Obst1 = 0x084, // sent when an obstruction happens?
         Obst2 = 0x085, // sent when an obstruction happens?
+        Battery = 0x09d,
         Pair3 = 0x0a0,
         Pair3Resp = 0x0a1,
         Learn2 = 0x181,
@@ -494,7 +804,7 @@ public:
         Pair2Resp = 0x401,
         SetTtc = 0x402,    // ttc_in_seconds = (byte1<<8)+byte2
         CancelTtc = 0x408, // ?
-        Ttc = 0x40a,       // Time to close
+        UpdateTtc = 0x40a, // Time to close
         GetOpenings = 0x48b,
         Openings = 0x48c, // openings = (byte1<<8)+byte2
     };
@@ -519,6 +829,8 @@ public:
             return "Obst1";
         case PacketCommandValue::Obst2:
             return "Obst2";
+        case PacketCommandValue::Battery:
+            return "Battery";
         case PacketCommandValue::Pair3:
             return "Pair3";
         case PacketCommandValue::Pair3Resp:
@@ -549,8 +861,8 @@ public:
             return "SetTtc";
         case PacketCommandValue::CancelTtc:
             return "CancelTtc";
-        case PacketCommandValue::Ttc:
-            return "Ttc";
+        case PacketCommandValue::UpdateTtc:
+            return "UpdateTtc";
         case PacketCommandValue::GetOpenings:
             return "GetOpenings";
         case PacketCommandValue::Openings:
@@ -571,6 +883,8 @@ public:
             return PacketCommandValue::Obst1;
         case PacketCommandValue::Obst2:
             return PacketCommandValue::Obst2;
+        case PacketCommandValue::Battery:
+            return PacketCommandValue::Battery;
         case PacketCommandValue::Pair3:
             return PacketCommandValue::Pair3;
         case PacketCommandValue::Pair3Resp:
@@ -601,8 +915,8 @@ public:
             return PacketCommandValue::SetTtc;
         case PacketCommandValue::CancelTtc:
             return PacketCommandValue::CancelTtc;
-        case PacketCommandValue::Ttc:
-            return PacketCommandValue::Ttc;
+        case PacketCommandValue::UpdateTtc:
+            return PacketCommandValue::UpdateTtc;
         case PacketCommandValue::GetOpenings:
             return PacketCommandValue::GetOpenings;
         case PacketCommandValue::Openings:
@@ -628,15 +942,20 @@ struct Packet
         uint32_t pkt_rolling = 0;   // three bytes
         uint64_t pkt_remote_id = 0; // three bytes
         uint32_t pkt_data = 0;
+        uint16_t cmd = 0;
 
         int8_t ret = decode_wireline(pktbuf, &pkt_rolling, &pkt_remote_id, &pkt_data);
         if (ret < 0)
         {
-            RERROR(TAG, "Failed to decode packet");
+            ESP_LOGE(TAG, "Failed to decode packet");
+            // leave cmd at zero (unknown) so that later code does not
+            // try and act on what could be a corrupt data packet
+            cmd = 0;
         }
-        RINFO(TAG, "DECODED  %08lX %016" PRIX64 " %08lX", pkt_rolling, pkt_remote_id, pkt_data);
-
-        uint16_t cmd = ((pkt_remote_id >> 24) & 0xF00) | (pkt_data & 0xFF);
+        else
+        {
+            cmd = ((pkt_remote_id >> 24) & 0xF00) | (pkt_data & 0xFF);
+        }
 
         m_pkt_cmd = PacketCommand::from_word(cmd);
         m_rolling = pkt_rolling;
@@ -648,7 +967,7 @@ struct Packet
         case PacketCommand::Unknown:
         {
             m_data.type = PacketDataType::Unknown;
-            m_data.value.cmd = cmd;
+            m_data.value.unknown = UnknownCommandData(pkt_data);
             break;
         }
 
@@ -665,18 +984,6 @@ struct Packet
             m_data.value.status = StatusCommandData(pkt_data);
             break;
         }
-
-        case PacketCommand::Obst1:
-        case PacketCommand::Obst2:
-        case PacketCommand::Pair3:
-        case PacketCommand::Pair3Resp:
-        case PacketCommand::Learn2:
-            // no data or unimplemented
-            {
-                m_data.type = PacketDataType::NoData;
-                m_data.value.no_data = NoData(pkt_data);
-                break;
-            }
 
         case PacketCommand::Lock:
         {
@@ -699,23 +1006,40 @@ struct Packet
             break;
         }
 
-        case PacketCommand::MotorOn:
-        case PacketCommand::Motion:
-        case PacketCommand::Learn1:
-        case PacketCommand::Ping:
-        case PacketCommand::PingResp:
-        case PacketCommand::Pair2:
-        case PacketCommand::Pair2Resp:
         case PacketCommand::SetTtc:
+        {
+            m_data.type = PacketDataType::SetTtc;
+            m_data.value.set_ttc = SetTtcCommandData(pkt_data);
+            break;
+        }
+
         case PacketCommand::CancelTtc:
-        case PacketCommand::Ttc:
-        case PacketCommand::GetOpenings:
-            // no data or unimplemented
-            {
-                m_data.type = PacketDataType::NoData;
-                m_data.value.no_data = NoData(pkt_data);
-                break;
-            }
+        {
+            m_data.type = PacketDataType::CancelTtc;
+            m_data.value.cancel_ttc = CancelTtcCommandData(pkt_data);
+            break;
+        }
+
+        case PacketCommand::UpdateTtc:
+        {
+            m_data.type = PacketDataType::UpdateTtc;
+            m_data.value.update_ttc = UpdateTtcCommandData(pkt_data);
+            break;
+        }
+
+        case PacketCommand::Pair2Resp:
+        {
+            m_data.type = PacketDataType::Pair2Resp;
+            m_data.value.pair2resp = Pair2RespCommandData(pkt_data);
+            break;
+        }
+
+        case PacketCommand::Pair3Resp:
+        {
+            m_data.type = PacketDataType::Pair3Resp;
+            m_data.value.pair3resp = Pair3RespCommandData(pkt_data);
+            break;
+        }
 
         case PacketCommand::Openings:
         {
@@ -723,7 +1047,43 @@ struct Packet
             m_data.value.openings = OpeningsCommandData(pkt_data);
             break;
         }
+
+        case PacketCommand::Battery:
+        {
+            m_data.type = PacketDataType::Battery;
+            m_data.value.battery = BatteryCommandData(pkt_data);
+            break;
         }
+
+        case PacketCommand::MotorOn:
+        case PacketCommand::Motion:
+        case PacketCommand::Obst1:
+        case PacketCommand::Obst2:
+        case PacketCommand::GetOpenings:
+        {
+            // These packets come in with no data, so notification only.
+            m_data.type = PacketDataType::NoData;
+            m_data.value.no_data = NoData(pkt_data);
+            break;
+        }
+
+        case PacketCommand::Learn1:
+        case PacketCommand::Learn2:
+        case PacketCommand::Pair2:
+        case PacketCommand::Pair3:
+        case PacketCommand::Ping:
+        case PacketCommand::PingResp:
+        {
+            // These packets have some data in them (maybe), but details not known
+            m_data.type = PacketDataType::Unknown;
+            m_data.value.unknown = UnknownCommandData(pkt_data);
+            break;
+        }
+        }
+
+        char buf[128];
+        m_data.to_string(buf, sizeof(buf));
+        ESP_LOGD(TAG, "DECODED  %08lX %016" PRIX64 " %08lX (%s - %s)", pkt_rolling, pkt_remote_id, pkt_data, PacketCommand::to_string(m_pkt_cmd), buf);
     }
 
     int8_t encode(uint32_t rolling, uint8_t *out_pktbuf)
@@ -731,8 +1091,7 @@ struct Packet
         m_rolling = rolling;
 
         uint32_t pkt_data = 0;
-        auto cmd = static_cast<uint64_t>(m_pkt_cmd);
-        uint64_t fixed = ((cmd & ~0xff) << 24) | static_cast<uint64_t>(m_remote_id & 0xFFffff);
+        uint64_t fixed = ((static_cast<uint64_t>(m_pkt_cmd) & ~0xff) << 24) | static_cast<uint64_t>(m_remote_id & 0xFFffff);
 
         switch (m_pkt_cmd)
         {
@@ -749,14 +1108,6 @@ struct Packet
             pkt_data = m_data.value.status.to_data();
             break;
         }
-
-        case PacketCommand::Obst1:
-        case PacketCommand::Obst2:
-        case PacketCommand::Pair3:
-        case PacketCommand::Pair3Resp:
-        case PacketCommand::Learn2:
-            // no data or unimplemented
-            break;
 
         case PacketCommand::Lock:
         {
@@ -777,30 +1128,59 @@ struct Packet
             break;
         }
 
-        case PacketCommand::MotorOn:
-        case PacketCommand::Motion:
-        case PacketCommand::Learn1:
-        case PacketCommand::Ping:
-        case PacketCommand::PingResp:
-        case PacketCommand::Pair2:
-        case PacketCommand::Pair2Resp:
         case PacketCommand::SetTtc:
-        case PacketCommand::CancelTtc:
-        case PacketCommand::Ttc:
-        case PacketCommand::GetOpenings:
-            // no data or unimplemented
+        {
+            pkt_data = m_data.value.set_ttc.to_data();
             break;
+        }
+
+        case PacketCommand::UpdateTtc:
+        {
+            pkt_data = m_data.value.update_ttc.to_data();
+            break;
+        }
+
+        case PacketCommand::CancelTtc:
+        {
+            pkt_data = m_data.value.cancel_ttc.to_data();
+            break;
+        }
 
         case PacketCommand::Openings:
         {
             pkt_data = m_data.value.openings.to_data();
             break;
         }
+
+        case PacketCommand::Battery:
+        {
+            pkt_data = m_data.value.battery.to_data();
+            break;
+        }
+
+        case PacketCommand::MotorOn:
+        case PacketCommand::Motion:
+        case PacketCommand::Obst1:
+        case PacketCommand::Obst2:
+        case PacketCommand::GetOpenings:
+        case PacketCommand::Pair2:
+        case PacketCommand::Pair2Resp:
+        case PacketCommand::Pair3:
+        case PacketCommand::Pair3Resp:
+        case PacketCommand::Learn2:
+        case PacketCommand::Learn1:
+        case PacketCommand::Ping:
+        case PacketCommand::PingResp:
+            // no data or unimplemented
+            break;
         }
 
         pkt_data |= (m_pkt_cmd & 0xFF);
 
-        RINFO(TAG, "ENCODING %08lX %016" PRIX64 " %08lX", m_rolling, fixed, pkt_data);
+        char buf[128];
+        m_data.to_string(buf, sizeof(buf));
+        ESP_LOGD(TAG, "ENCODING %08lX %016" PRIX64 " %08lX (%s - %s)", m_rolling, fixed, pkt_data, PacketCommand::to_string(m_pkt_cmd), buf);
+
         return encode_wireline(m_rolling, fixed, pkt_data, out_pktbuf);
     }
 
@@ -813,11 +1193,9 @@ struct Packet
 
     void print(void)
     {
-        size_t buflen = 128;
-        char buf[buflen];
-        m_data.to_string(buf, buflen);
-
-        RINFO(TAG, "PACKET(0x%lX @ 0x%lX) %s - %s", m_remote_id, m_rolling, PacketCommand::to_string(m_pkt_cmd), buf);
+        char buf[128];
+        m_data.to_string(buf, sizeof(buf));
+        ESP_LOGI(TAG, "PACKET(0x%lX @ 0x%lX) %s - %s", m_remote_id, m_rolling, PacketCommand::to_string(m_pkt_cmd), buf);
     };
 
     PacketCommand m_pkt_cmd;

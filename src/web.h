@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -18,22 +18,37 @@
 // none
 
 // ESP system includes
-// none
+#ifdef ESP32
+#define PROGMEM // so it is no-op in webcontent.h
+#include <WebServer.h>
+extern WebServer server;
+#else
+#include <ESP8266WebServer.h>
+extern ESP8266WebServer server;
+#endif
 
 // RATGDO project includes
-#define PROGMEM // so it is no-op in webcontent.h
-#include "www/build/webcontent.h"
+// none
 
 extern void setup_web();
 extern void web_loop();
 
 extern void handle_notfound();
 extern void handle_reboot();
+extern void factoryReset();
 
 extern void load_page(const char *page);
 
+extern void build_status_json(char *json);
+
 extern const char response400invalid[];
 extern const char type_txt[];
+
+extern _millis_t lastDoorUpdateAt;
+extern _millis_t lastDoorOpenAt;
+extern _millis_t lastDoorCloseAt;
+
+extern bool web_setup_done;
 
 enum BroadcastType : uint8_t
 {
@@ -41,5 +56,3 @@ enum BroadcastType : uint8_t
     LOG_MESSAGE = 2,
 };
 void SSEBroadcastState(const char *data, BroadcastType type = RATGDO_STATUS);
-
-extern "C" int crashCount; // pull in number of times crashed.

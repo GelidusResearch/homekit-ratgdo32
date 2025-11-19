@@ -1,7 +1,7 @@
 /***********************************************************************
  * homekit-ratgdo logger web page javascript functions
  *
- * Copyright (c) 2024 David Kerr, https://github.com/dkerr64
+ * Copyright (c) 2024-25 David Kerr, https://github.com/dkerr64
  *
  */
 
@@ -9,50 +9,8 @@
 var evtSource = undefined;      // for Server Sent Events (SSE)
 var msgJson = undefined;        // for status
 const clientUUID = uuidv4();    // uniquely identify this session
-
-function findStartTime(text) {
-    const regex = /[\s\r\n]/;
-    let serverTime = undefined;
-    let upTime = undefined;
-    let bootTime = undefined;
-
-    function search(string, regexp, from = 0) {
-        const index = string.slice(from).search(regexp);
-        return index === -1 ? -1 : index + from;
-    }
-
-    let i = text.indexOf(':', text.indexOf('Server uptime')) + 2;
-    let j = search(text, regex, i);
-    upTime = Number(text.substring(i, j));
-
-    i = text.indexOf('Server time');
-    if (i >= 0) {
-        i = text.indexOf(':', i) + 2;
-        let j = search(text, regex, i);
-        serverTime = Number(text.substring(i, j)) * 1000;
-        bootTime = serverTime - upTime;
-    }
-
-    return {
-        serverTime: serverTime,
-        upTime: upTime,
-        bootTime: bootTime
-    };
-}
-
-function insertTimeStamp(text, startTime) {
-    if (startTime) {
-        let i = 0;
-        let date = new Date();
-        while ((i = text.indexOf('>>> [', i) + 1) > 0) {
-            let j = text.indexOf(']', i);
-            let logTime = Number(text.substring(i + 4, j));
-            date.setTime(startTime + logTime);
-            text = text.substring(0, i - 1) + '[' + date.toJSON() + text.substring(j);
-        }
-    }
-    return text;
-}
+var sysLogLoaded = false;
+var tmpLogMsgs = [];
 
 function msToTime(duration) {
     let seconds = Math.floor((duration / 1000) % 60),
@@ -74,6 +32,8 @@ function openTab(evt, tabName) {
     for (i = 0; i < tabcontent.length; i++) {
         tabcontent[i].style.display = "none";
     }
+    document.getElementById("clearLogBtn").style.display = "none";
+    document.getElementById("reloadLogButton").style.display = "none";
     document.getElementById("clearBtn").style.display = "none";
     // Get all elements with class="tablinks" and remove the class "active"
     tablinks = document.getElementsByClassName("tablinks");
@@ -83,8 +43,11 @@ function openTab(evt, tabName) {
     // Show the current tab, and add an "active" class to the button that opened the tab
     document.getElementById(tabName).style.display = "block";
     evt.currentTarget.className += " active";
-    if (tabName === "crashTab") {
-        if (msgJson?.crashCount > 0) {
+    if (tabName === "logTab") {
+        document.getElementById("clearLogBtn").style.display = "inline-block";
+        document.getElementById("reloadLogButton").style.display = "inline-block";
+    } else if (tabName === "crashTab") {
+        if (msgJson?.crashCount != 0) {
             document.getElementById("clearBtn").style.display = "inline-block";
         }
     } else if (tabName === "statusTab") {
@@ -109,23 +72,85 @@ function openTab(evt, tabName) {
 }
 
 async function loadLogs() {
+    sysLogLoaded = false;
+    tmpLogMsgs.length = 0;
     // Load all the logs in parallel, showing progress indicator while we do...
-    let serverBootTime = undefined;
     loaderElem.style.visibility = "visible";
-    console.log("Start loading server logs and status");
+    console.log("Subscribe to Server Sent Events");
+    fetch("rest/events/subscribe?id=" + clientUUID + "&log=1&heartbeat=0")
+        .then((response) => {
+            if (!response.ok || response.status !== 200) {
+                reject(`Error registering for Server Sent Events, RC: ${response.status}`);
+            } else {
+                return response.text();
+            }
+        })
+        .then((text) => {
+            const evtUrl = text + '?id=' + clientUUID;
+            console.log(`Register for Server Sent Events at ${evtUrl}`);
+            evtSource = new EventSource(evtUrl);
+            evtSource.onopen = () => {
+                console.log("Load each log page");
+                loadLogPages();
+            };
+            evtSource.addEventListener("logger", (event) => {
+                let divElem = document.getElementById("logTab");
+                let scroll = (divElem.scrollHeight - divElem.scrollTop - divElem.clientHeight) < 10;
+                document.getElementById("showlog").insertAdjacentText('beforeend', event.data + "\n");
+                if (!sysLogLoaded) tmpLogMsgs.push(event.data);
+                // Only scroll the page if we are already at bottom of the page
+                if (scroll) divElem.scrollTop = divElem.scrollHeight;
+            });
+            evtSource.addEventListener("error", (event) => {
+                // If an error occurs close the connection.
+                console.log(`SSE error occurred while attempting to connect to ${evtSource.url}`);
+                evtSource.close();
+            });
+        })
+        .catch((error) => {
+            console.warn(`Failed to register for Server Sent Events: ${error}`);
+        });
+}
+
+async function loadLogPages() {
+    // Load the pages in background
     Promise.allSettled([
+
+        fetch("showlog")
+            .then((response) => {
+                if (!response.ok || response.status !== 200) {
+                    reject(`Error requesting logs, RC: ${response.status}`);
+                } else {
+                    return response.text();
+                }
+            })
+            .then((text) => {
+                sysLogLoaded = true;
+                // reduce newlines down to single \n
+                text = text.replaceAll('\r\n', '\n');
+                while (line = tmpLogMsgs.pop()) {
+                    console.log(`Remove dup: ${line}`);
+                    text = text.replace(line + '\n', '');
+                }
+                document.getElementById("showlog").insertAdjacentText('afterbegin', text);
+                let divElem = document.getElementById("logTab");
+                // Scroll to the bottom
+                divElem.scrollTop = divElem.scrollHeight;
+            })
+            .catch(error => console.warn(error)),
+
         fetch("status.json")
             .then((response) => {
                 if (!response.ok || response.status !== 200) {
-                    reject(`Error requsting status.json, RC: ${response.status}`);
+                    reject(`Error requesting status.json, RC: ${response.status}`);
                 } else {
                     return response.text();
                 }
             })
             .then((text) => {
                 msgJson = JSON.parse(text);
-                document.getElementById("deviceName").innerHTML = msgJson.deviceName + " Logs";
-                document.title = msgJson.deviceName + " Logs";
+                document.getElementById("deviceName").innerHTML = msgJson.deviceName;
+                document.title = msgJson.deviceName;
                 document.getElementById("statusjson").innerText = text;
             })
             .catch(error => console.warn(error)),
@@ -133,108 +158,28 @@ async function loadLogs() {
         fetch("showrebootlog")
             .then((response) => {
                 if (!response.ok || response.status !== 200) {
-                    reject(`Error requsting reboot logs, RC: ${response.status}`);
+                    reject(`Error requesting reboot logs, RC: ${response.status}`);
                 } else {
                     return response.text();
                 }
             })
             .then((text) => {
-                const { serverTime, upTime, bootTime } = findStartTime(text);
-                const elem = document.getElementById("rebootlog");
-                if (bootTime) {
-                    let date = new Date();
-                    date.setTime(bootTime);
-                    elem.insertAdjacentHTML('beforebegin', `<pre style="margin: 0px; color : darkgoldenrod">Server started at:  ${date.toUTCString()}</pre>`);
-                    date.setTime(serverTime);
-                    elem.insertAdjacentHTML('beforebegin', `<pre style="margin: 0px; color : darkgoldenrod">Server shutdown at: ${date.toUTCString()}</pre>`);
-                }
-                if (upTime) {
-                    elem.insertAdjacentHTML('beforebegin', `<pre style="margin: 0px; color : darkgoldenrod">Server upTime:      ${msToTime(upTime)}</pre>`);
-                }
-                elem.innerText = insertTimeStamp(text, bootTime);
+                document.getElementById("rebootlog").innerText = text;
             })
             .catch(error => console.warn(error)),
 
         fetch("crashlog")
             .then((response) => {
                 if (!response.ok || response.status !== 200) {
-                    reject(`Error requsting crash logs, RC: ${response.status}`);
+                    reject(`Error requesting crash logs, RC: ${response.status}`);
                 } else {
                     return response.text();
                 }
             })
             .then((text) => {
-                const { serverTime, upTime, bootTime } = findStartTime(text);
-                const elem = document.getElementById("crashlog-timestamps");
-                if (bootTime) {
-                    let date = new Date();
-                    date.setTime(bootTime);
-                    elem.insertAdjacentHTML('beforeend', `<pre style="margin: 0px; color : darkgoldenrod">Server started at: ${date.toUTCString()}</pre>`);
-                    date.setTime(serverTime);
-                    elem.insertAdjacentHTML('beforeend', `<pre style="margin: 0px; color : darkgoldenrod">Server crashed at: ${date.toUTCString()}</pre>`);
-                }
-                if (upTime) {
-                    elem.insertAdjacentHTML('beforeend', `<pre style="margin: 0px; color : darkgoldenrod">Server upTime:     ${msToTime(upTime)}</pre>`);
-                }
-                document.getElementById("crashlog").innerText = insertTimeStamp(text, bootTime);
+                document.getElementById("crashlog").innerText = text;
             })
             .catch(error => console.warn(error)),
-
-        fetch("rest/events/subscribe?id=" + clientUUID + "&log=1")
-            .then((response) => {
-                if (!response.ok || response.status !== 200) {
-                    reject(`Error registering for Server Sent Events, RC: ${response.status}`);
-                } else {
-                    return response.text();
-                }
-            })
-            .then((text) => {
-                const evtUrl = text + '?id=' + clientUUID;
-                console.log(`Register for server sent events at ${evtUrl}`);
-                evtSource = new EventSource(evtUrl);
-                evtSource.addEventListener("logger", (event) => {
-                    let divElem = document.getElementById("logTab");
-                    let scroll = (divElem.scrollHeight - divElem.scrollTop - divElem.clientHeight) < 10;
-                    document.getElementById("showlog").insertAdjacentText('beforeend', insertTimeStamp(event.data, serverBootTime) + "\n");
-                    // Only scroll the page if we are already at bottom of the page
-                    if (scroll) divElem.scrollTop = divElem.scrollHeight;
-                });
-                evtSource.addEventListener("error", (event) => {
-                    // If an error occurs close the connection.
-                    console.log(`SSE error occurred while attempting to connect to ${evtSource.url}`);
-                    evtSource.close();
-                });
-            })
-            .catch(error => console.warn(error)),
-
-        fetch("showlog")
-            .then((response) => {
-                if (!response.ok || response.status !== 200) {
-                    reject(`Error requsting logs, RC: ${response.status}`);
-                } else {
-                    return response.text();
-                }
-            })
-            .then((text) => {
-                const elem = document.getElementById("showlog");
-                const { serverTime, upTime, bootTime } = findStartTime(text);
-                serverBootTime = bootTime;
-                if (bootTime) {
-                    let date = new Date();
-                    date.setTime(bootTime);
-                    elem.insertAdjacentHTML('beforebegin', `<pre style="margin: 0px; color : darkgoldenrod">Server started at:   ${date.toUTCString()}</pre>`);
-                    date.setTime(serverTime);
-                    elem.insertAdjacentHTML('beforebegin', `<pre style="margin: 0px; color : darkgoldenrod">Server current time: ${date.toUTCString()}</pre>`);
-                }
-                if (upTime) {
-                    elem.insertAdjacentHTML('beforebegin', `<pre style="margin: 0px; color : darkgoldenrod">Server upTime:       ${msToTime(upTime)}</pre>`);
-                }
-                elem.insertAdjacentText('afterbegin', insertTimeStamp(text, serverBootTime));
-                let divElem = document.getElementById("logTab");
-                // Scroll to the bottom
-                divElem.scrollTop = divElem.scrollHeight;
-            })
-            .catch(error => console.warn(error))
     ])
         .then((results) => {
             // Once all loaded reset the progress indicator
@@ -244,13 +189,20 @@ async function loadLogs() {
         });
 }
 
+async function clearLog(reload) {
+    // Erase current content
+    document.getElementById("showlog").innerText = "";
+    document.getElementById("showLogHeader").innerHTML = "";
+    // Load logs
+    if (reload) loadLogs();
+}
+
 async function clearCrashLog() {
     loaderElem.style.visibility = "visible";
     await fetch('clearcrashlog');
     document.getElementById("clearBtn").style.display = "none";
     if (msgJson) msgJson.crashCount = 0;
     document.getElementById("crashlog").innerText = "No crashes saved";
-    document.getElementById("crashlog-timestamps").innerText = "";
     loaderElem.style.visibility = "hidden";
 }
 // Generate a UUID.  Cannot use crypto.randomUUID() because that will only run

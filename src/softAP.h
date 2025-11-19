@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -16,8 +16,6 @@
 
 // C/C++ language includes
 #include <set>
-// ESP system includes
-// #include <esp_wifi_types.h>
 
 // RATGDO project includes
 #include "ratgdo.h"
@@ -28,18 +26,24 @@ typedef struct
     int32_t rssi;
     int32_t channel;
     uint8_t bssid[6];
+#ifndef ESP8266
+    // Not impemented on ESP8266
     wifi_auth_mode_t encryptionType;
+#else
+    uint8_t encryptionType;
+#endif
 } wifiNet_t;
-extern std::multiset<wifiNet_t, bool (*)(wifiNet_t, wifiNet_t)> wifiNets;
+extern std::multiset<wifiNet_t, bool (*)(const wifiNet_t &, const wifiNet_t &)> wifiNets;
 
 extern void start_soft_ap();
 extern void soft_ap_loop();
 extern void wifi_scan();
+const char *encryptionToString(uint16_t e);
 
 extern void handle_setssid();
 extern void handle_rescan();
 extern void handle_wifinets();
 extern void handle_wifiap();
 
-extern bool connect_wifi(const String &ssid, const String &password, const uint8_t *bssid);
-extern bool connect_wifi(const String &ssid, const String &password);
+extern bool connect_wifi(const char *ssid, const char *password, const uint8_t *bssid = NULL);
+extern bool set_new_ssid(const char *ssid, const char *password, const uint8_t *bssid = NULL);

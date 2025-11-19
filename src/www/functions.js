@@ -1,17 +1,27 @@
 /***********************************************************************
  * homekit-ratgdo web page javascript functions
  *
- * Copyright (c) 2023-24 David Kerr, https://github.com/dkerr64
+ * Copyright (c) 2023-25 David Kerr, https://github.com/dkerr64
  *
  */
 
 // Global vars...
+var isESP8266 = false;          // set true if running on ESP8266 original ratgdo
 var serverStatus = {};          // object into which all server status is held.
 var checkHeartbeat = undefined; // setTimeout for heartbeat timeout
 var evtSource = undefined;      // for Server Sent Events (SSE)
 var delayStatusFn = [];         // to keep track of possible checkStatus timeouts
 const clientUUID = uuidv4();    // uniquely identify this session
-const rebootSeconds = 10;       // How long to wait before reloading page after reboot
+var rebootSeconds = 10;         // How long to wait before reloading page after reboot
+var setGDOcmds = {              // setGDO commands that are not sent from server nor exist in HTML
+    credentials: "",
+    updateUnderway: "",
+    resetDoor: false,
+    softAPmode: false,
+    factoryReset: false,
+};
+var gitUser = "gelidusresearch";         // default git user.
+var gitRepo = "homekit-ratgdo32"; // default git repository.
 
 // https://stackoverflow.com/questions/7995752/detect-desktop-browser-not-mobile-with-javascript
 // const isTouchDevice = function () { return 'ontouchstart' in window || 'onmsgesturechange' in window; };
@@ -31,6 +41,8 @@ const timeZoneDefaults = '"Etc/UTC","UTC0"\n' +
     '"Pacific/Honolulu","HST10"';
 var timeZones = new Array();
 var timeZonesLoaded = false;
+var tzOptions = { timeZone: "Etc/UTC", timeZoneName: "short" };
+var tzFormat = undefined; // Use default format in the browser locale
 
 // very simple, work for above
 function tzToArray(str) {
@@ -65,6 +77,7 @@ async function loadTimeZones() {
     catch {
         // failed to retrieve timezones so use built-in defaults
         tzCSV = timeZoneDefaults;
+        console.warn("Failed to load timezones");
     }
     // Now convert it into our global array
     timeZones.length = 0;
@@ -76,7 +89,7 @@ async function loadTimeZones() {
             maxLength = timeZones[index].length;
     });
     timeZonesLoaded = true;
-    console.log(`Maximum length of timezone strings: ${maxLength}`);
+    console.log(`Loaded ${timeZones.length} timezones, maximum length of strings: ${maxLength}`);
 }
 
 function waitTimeZoneLoad() {
@@ -101,7 +114,7 @@ async function setServerTimeZone(location) {
     }
 }
 
-// convert miliseconds to dd:hh:mm:ss used to calculate server uptime
+// convert milliseconds to dd:hh:mm:ss used to calculate server uptime
 function msToTime(duration) {
     var milliseconds = Math.floor((duration % 1000) / 100),
         seconds = Math.floor((duration / 1000) % 60),
@@ -124,7 +137,26 @@ function toggleSyslog() {
         Array.from(document.getElementsByClassName("syslogIPinput")).forEach(function (inputField) {
             inputField.value = "";
         });
+        // And reset the facility number to current value;
+        document.getElementById("syslogFacility").value = serverStatus.syslogFacility;
     }
+}
+
+function toggleDCOpenClose(radio) {
+    let value = radio.value;
+    document.getElementById("dcOpenCloseRow").style.display = (value != 3) ? "table-row" : "none";
+    if (serverStatus["useSWserial"] != undefined) {
+        document.getElementById("useSWserialRow").style.display = (value != 3) ? "table-row" : "none";
+    }
+    document.getElementById("obstFromStatusRow").style.display = (value != 3) ? "table-row" : "none";
+    document.getElementById("dcDebounceDurationRow").style.display = (value == 3) ? "table-row" : "none";
+}
+
+// enable laser
+function enableLaser(value) {
+    document.getElementById('laserHomeKit').disabled = !value;
+    document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
+    document.getElementById("parkAssist").style.display = (value) ? "table-row" : "none";
 }
 
 // Show or hide the static IP fields
@@ -159,43 +191,173 @@ async function loadTZinfo(list) {
         });
     }
     // select current value
-    let index = timeZones.indexOf(serverStatus.timeZone);
+    const index = timeZones.indexOf(serverStatus.timeZone);
     if (index >= 0) {
         list.selectedIndex = index;
     }
 }
 
+function showQrCode(payload) {
+    if (serverStatus.paired)
+        return;
+
+    console.log(`Create QR code for ${payload}`);
+    var qrcode = new QRCode(document.getElementById("qr-svg"), {
+        width: 300,
+        height: 300,
+        useSVG: true
+    });
+    qrcode.makeCode(payload);
+}
+
+function copyToClipboard(event) {
+    const codeBlock = event.target.closest('.copy');
+    const copyButton = codeBlock.querySelector('.copyBtn');
+    const copiedText = codeBlock.querySelector('.copied');
+    const textToCopy = codeBlock.querySelector('.copyTxt');
+
+    // get the text
+    const text = textToCopy.innerHTML;
+    var success = false;
+
+    // check if in https (secure) environment
+    if (window.isSecureContext && navigator.clipboard && Object.hasOwn(navigator.clipboard, "writeText")) {
+        // copy to clipboard
+        navigator.clipboard.writeText(text)
+            .then(() => {
+                success = true;
+            })
+            .catch(err => {
+                console.error('Unable to copy to clipboard ', err);
+            });
+    } else {
+        const textArea = document.createElement("textarea");
+        // Set the text to be copied into the textarea
+        textArea.value = text;
+        // Append to the DOM
+        document.body.appendChild(textArea);
+        // Select and execute the copy command
+        textArea.focus();
+        textArea.select();
+        try {
+            // still works on most broswers
+            document.execCommand('copy');
+            success = true;
+        } catch (err) {
+            console.error('Unable to copy to clipboard (Fallback failed) ', err);
+        }
+        // Remove the now-unnecessary element
+        document.body.removeChild(textArea);
+    }
+
+    if (success) {
+        // Show success message
+        copyButton.style.visibility = 'hidden';
+        copiedText.style.visibility = 'visible';
+        // Hide the message after short delay
+        setTimeout(() => {
+            copiedText.style.visibility = 'hidden';
+            copyButton.style.visibility = 'visible';
+        }, 500);
+    }
+    else {
+        console.error('Unable to copy to clipboard (success false)');
+    }
+}
+
+function makeRfc952(src) {
+    // Make device name RFC952 compliant (simple, just checking for the basics)
+    // RFC952 says max len of 24, [a-z][A-Z][0-9][-.] and no dash or period in last char.
+    let dest = src.substring(0, 24);
+    dest = dest.replace(/[^a-zA-Z0-9.]/g, '-');
+    while (dest.length > 0 && (dest.slice(-1) === '-' || dest.slice(-1) === '.')) {
+        dest = dest.substring(0, dest.length - 1);
+    }
+    return dest;
+}
+
+function capitalizeFirstLetter(val) {
+    return String(val).charAt(0).toUpperCase() + String(val).slice(1);
+}
+
 // Update all elements on HTML page to reflect status
 function setElementsFromStatus(status) {
     let date = new Date();
+    if (status.timeZone) {
+        // Do timezone first, as some other values depend on this
+        // for correct time calculation / display.
+        let i = status.timeZone.indexOf(';');
+        if (i < 0) {
+            // No semicolon so POSIX time zone info is missing, tell server the time zone (async);
+            setServerTimeZone(status.timeZone);
+            tzOptions.timeZone = status.timeZone;
+        }
+        else {
+            let tz = status.timeZone.substring(0, i);
+            // Validate timezone - if empty or invalid, use default UTC
+            if (tz && tz !== "undefined") {
+                tzOptions.timeZone = tz;
+            } else {
+                tzOptions.timeZone = "Etc/UTC";
+            }
+        }
+    }
     for (const [key, value] of Object.entries(status)) {
         switch (key) {
+            case "gitRepo":
+                gitRepo = value;
+                document.getElementById("docsLink").href = "https://github.com/" + gitUser + "/" + gitRepo;
+                document.getElementById("contribLink").href = "https://github.com/" + gitUser + "/" + gitRepo + "/graphs/contributors";
+                break;
             case "paired":
                 if (value) {
                     document.getElementById("unpair").value = "Un-pair HomeKit";
                     document.getElementById("qrcode").style.display = "none";
+                    document.getElementById("qr-svg").style.display = "none";
                     document.getElementById("re-pair-info").style.display = "inline-block";
                 } else {
                     document.getElementById("unpair").value = "Reset HomeKit";
                     document.getElementById("re-pair-info").style.display = "none";
                     document.getElementById("qrcode").style.display = "inline-block";
+                    document.getElementById("qr-svg").style.display = "block";
+
                 }
                 break;
             case "upTime":
                 document.getElementById(key).innerHTML = msToTime(value);
                 date.setTime(Date.now() - value);
-                document.getElementById("lastRebootAt").innerHTML = date.toLocaleString();
+                document.getElementById("lastRebootAt").innerHTML = date.toLocaleString(tzFormat, tzOptions);
                 break;
             case "GDOSecurityType":
-                document.getElementById(key).innerHTML = (value == 1) ? "Sec+ " : (value == 2) ? "Sec+ 2.0" : "Dry Contact";
+                document.getElementById(key).innerHTML = (value == 1) ? "Sec+" : (value == 2) ? "Sec+&nbsp;2.0" : "Dry&nbsp;Contact";
                 document.getElementById("gdosec1").checked = (value == 1);
                 document.getElementById("gdosec2").checked = (value == 2);
                 document.getElementById("gdodrycontact").checked = (value == 3);
+                document.getElementById("builtInTTCrow").style.display = (value == 2) ? "table-row" : "none";
+                document.getElementById("lockButton").style.display = (value != 3) ? "inline-block" : "none";
+                document.getElementById("doorButton").style.margin = (value != 3) ? "" : "auto"; // auto will center the button
+                document.getElementById("lightButton").style.display = (value != 3) ? "inline-block" : "none";
+                document.getElementById("lockLightRow").style.display = (value != 3) ? "table-row" : "none";
+                document.getElementById("dcOpenCloseRow").style.display = (value != 3) ? "table-row" : "none";
+                if (serverStatus["useSWserial"] != undefined) {
+                    document.getElementById("useSWserialRow").style.display = (value != 3) ? "table-row" : "none";
+                }
+                document.getElementById("obstFromStatusRow").style.display = (value != 3) ? "table-row" : "none";
+                document.getElementById("dcDebounceDurationRow").style.display = (value == 3) ? "table-row" : "none";
+                document.getElementById("motionMotion").disabled = (value == 2) ? false : true;
+                break;
+            case "pinBasedObst":
+                document.getElementById(key).innerHTML = (value == true) ? "&nbsp;(Pin-based)" : "&nbsp;(Message)";
+                break;
+            case "garageSec1Emulated":
+                document.getElementById("sec1emulation").style.display = (value == true) ? "" : "none";
                 break;
             case "deviceName":
                 document.getElementById(key).innerHTML = value;
                 document.title = value;
                 document.getElementById("newDeviceName").placeholder = value;
+                let mdnsName = makeRfc952(value) + ".local";
+                document.getElementById("mdnsName").innerHTML = mdnsName;
                 break;
             case "userName":
                 document.getElementById("newUserName").placeholder = value;
@@ -212,44 +374,106 @@ function setElementsFromStatus(status) {
                 document.getElementById("rebootHours").value = value / 60 / 60;
                 break;
             case "TTCseconds":
-                document.getElementById(key).value = value;
-                document.getElementById("TTCsecondsValue").innerHTML = value;
+                document.getElementById(key).value = (value <= 10) ? value : (value <= 20) ? (value - 10) / 5 + 10 : 21;
+                document.getElementById("TTCsecondsValue").innerText = value;
+                document.getElementById("TTCwarning").style.display = (value < 5) ? "inline" : "none";
+                break;
+            case "builtInTTC":
+                document.getElementById(key).value = (value <= 600) ? value / 60 : (value <= 3600) ? (value - 600) / 300 + 10 : 20;
+                document.getElementById("builtInTTCValue").innerText = (value / 60).toFixed(1).replace(/\.?0+$/, "");
+                break;
+            case "occupancyDuration":
+                let mins = value / 60;
+                document.getElementById(key).value = (mins <= 10) ? mins : (mins <= 32) ? (mins - 10) / 5 + 10 : 0;
+                document.getElementById("occupancyValue").innerHTML = mins;
+                document.getElementById("trOccupancyDuration").style.display = "table-row";
                 break;
             case "distanceSensor":
                 document.getElementById("vehicleRow").style.display = (value) ? "table-row" : "none";
                 document.getElementById("vehicleSetting").style.display = (value) ? "table-row" : "none";
-                document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
+                document.getElementById("vehicleSettingsSpacer").style.display = (value) ? "table-row" : "none";
+                document.getElementById("vehicleHomeKitRow").style.display = (value) ? "table-row" : "none";
+                document.getElementById("laserSetting").style.display = (value) ? "table-row" : "none";
                 break;
             case "vehicleThreshold":
                 document.getElementById(key).value = value;
                 document.getElementById("vehicleThresholdCM").innerHTML = value;
                 document.getElementById("vehicleThresholdInch").innerHTML = Math.round(value / .254) / 10;
                 break;
+            case "vehicleDist":
+                document.getElementById(key).innerHTML = value;
+                document.getElementById("vehicleDistInch").innerHTML = Math.round(value / .254) / 10;
+                break;
+            case "laserEnabled":
+                document.getElementById(key).checked = value;
+                document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
+                document.getElementById("laserHomeKit").disabled = !value;
+                document.getElementById("parkAssist").style.display = (value) ? "table-row" : "none";
+                break;
+            case "homespanCLI":
+                document.getElementById(key).checked = value;
+                document.getElementById("homespanSetting").style.display = "table-row";
+                break;
+            case "laserHomeKit":
+            case "vehicleHomeKit":
+            case "dcOpenClose":
+            case "useSWserial":
+            case "obstFromStatus":
+                document.getElementById(key).checked = value;
+                break;
+            case "TTClight":
+                document.getElementById(key).checked = value;
+                document.getElementById("TTCwarning2").style.display = (value) ? "none" : "inline";
+                break;
+            case "assistDuration":
+                document.getElementById(key).value = value;
+                document.getElementById("assistValue").innerHTML = value;
+                break;
+            case "dcDebounceDuration":
+                document.getElementById(key).value = value;
+                document.getElementById("dcDebounceValue").innerHTML = value;
+                break;
             case "firmwareVersion":
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("firmwareVersion2").innerHTML = value;
                 break;
-            /* TODO add support for selecting WiFi PhyMode and WiFi TX Power
+            case "hardwareRevision":
+                // Store hardware revision for OTA update filtering
+                serverStatus.hardwareRevision = value;
+                console.log(`Hardware revision: ${value}`);
+                break;
             case "wifiPhyMode":
+                document.getElementById("trWifiPhyMode").style.display = "table-row";
                 document.getElementById("wifiPhyMode0").checked = (value == 0) ? true : false;
                 document.getElementById("wifiPhyMode1").checked = (value == 1) ? true : false;
                 document.getElementById("wifiPhyMode2").checked = (value == 2) ? true : false;
                 document.getElementById("wifiPhyMode3").checked = (value == 3) ? true : false;
+                // Using wifiPhyMode as proxy for ESP8266... will not be sent by ESP32
+                isESP8266 = true;
+                rebootSeconds = 15;
                 break;
             case "wifiPower":
+                document.getElementById("trWifiPower").style.display = "table-row";
                 document.getElementById(key).value = value;
                 document.getElementById("wifiPowerValue").innerHTML = value;
                 break;
             case "lockedAP":
                 document.getElementById("lockedAP").style.display = (value) ? "table" : "none";
                 break;
+            case "accessoryID":
+                document.getElementById("trAccessoryID").style.display = "table-row";
+                document.getElementById(key).innerHTML = value;
+                break;
             case "clients":
                 document.getElementById(key).innerHTML = (value > 0) ? `Yes (${value})` : 'No';
                 break;
-            */
             case "localIP":
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("IPaddress").placeholder = value;
+                break;
+            case "ipv6Addresses":
+                document.getElementById("trEnableIPv6").style.display = "table-row";
+                document.getElementById(key).innerHTML = value.split(',').join('\n');
                 break;
             case "subnetMask":
                 document.getElementById(key).innerHTML = value;
@@ -274,54 +498,120 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("syslogPort").placeholder = value;
                 break;
+            case "syslogFacility":
+                document.getElementById(key).value = value;
+                break;
             case "syslogEn":
                 document.getElementById(key).checked = value;
                 document.getElementById("syslogTable").style.display = (value) ? "table" : "none";
+                break;
+            case "logLevel":
+                document.getElementById("logLevel0").checked = (value == 0) ? true : false;
+                document.getElementById("logLevel1").checked = (value == 1) ? true : false;
+                document.getElementById("logLevel2").checked = (value == 2) ? true : false;
+                document.getElementById("logLevel3").checked = (value == 3) ? true : false;
+                document.getElementById("logLevel4").checked = (value == 4) ? true : false;
+                document.getElementById("logLevel5").checked = (value == 5) ? true : false;
                 break;
             case "enableNTP":
                 document.getElementById(key).checked = value;
                 document.getElementById("timeZoneTable").style.display = (value) ? "table" : "none";
                 break;
-            case "timeZone":
-                if (value.indexOf(';') < 0) {
-                    // No semicolon so POSIX time zone info is missing, tell server the time zone (async);
-                    setServerTimeZone(value);
-                }
+            case "enableIPv6":
+                document.getElementById(key).checked = value;
+                document.getElementById("ipv6Row").style.display = (value) ? "table-row" : "none";
                 break;
-            case "lastDoorUpdateAt":
+            case "timeZone":
+                // Ignore (handled before switch statement)
+                break;
+            case "doorUpdateAt":
                 date.setTime(Date.now() - value);
-                document.getElementById(key).innerHTML = (document.getElementById("lastRebootAt").innerHTML == date.toLocaleString()) ? "Unknown" : date.toLocaleString();
+                // if value equals upTime then server does not know last door update time
+                document.getElementById(key).innerHTML = (status.upTime == value) ? "Unknown" : date.toLocaleString(tzFormat, tzOptions);
+                break;
+            case "doorOpenAt":
+            case "doorCloseAt":
+                date.setTime(Date.now() - value);
+                // if value equals upTime then server does not know last door open/close time
+                document.getElementById(key).innerHTML = (status.upTime == value) ? "" : date.toLocaleString(tzFormat, tzOptions);
                 break;
             case "serverTime":
                 date.setTime(value * 1000);
-                console.log(`Server time: ${date.toUTCString()}`);
+                console.log(`Server time: ${date.toLocaleString(tzFormat, tzOptions)}`);
                 break;
             case "motionTriggers":
                 setMotionTriggers(value);
                 break;
             case "garageLightOn":
-                document.getElementById(key).innerHTML = value;
+                document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
                 document.getElementById("lightButton").value = (value == false) ? "Light On" : "Light Off";
                 break;
             case "garageDoorState":
-                document.getElementById(key).innerHTML = value;
-                document.getElementById("doorButton").value = (value == "Closed") ? "Open Door" : "Close Door";
+                document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
+                if (status.ttcActive) {
+                    document.getElementById("doorButton").value = "Cancel Close";
+                } else {
+                    document.getElementById("doorButton").value = (value == "Closed" || value == "Closing") ? "Open Door" : "Close Door";
+                }
                 break;
             case "garageLockState":
-                document.getElementById(key).innerHTML = value;
-                document.getElementById("lockButton").value = (value == "Unsecured") ? "Lock Door" : "Unlock Door";
+                document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
+                document.getElementById("lockButton").value = (value == "Enabled") ? "Disable Remotes" : "Enable Remotes";
+                break;
+            case "garageObstructed":
+            case "garageMotion":
+                document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
+                break;
+            case "ttcActive":
+                if (value) {
+                    document.getElementById("garageDoorState").innerHTML = "Closing";
+                    document.getElementById(key).innerHTML = `&nbsp;in&nbsp;${value}`;
+                    document.getElementById(key).style.display = "";
+                    document.getElementById("doorButton").value = "Cancel Close";
+                }
+                else {
+                    document.getElementById(key).style.display = "none";
+                    state = capitalizeFirstLetter(status.garageDoorState ? status.garageDoorState : "Closing");
+                    document.getElementById("garageDoorState").innerHTML = state;
+                    document.getElementById("doorButton").value = (state == "Closed" || state == "Closing") ? "Open Door" : "Close Door";
+                }
                 break;
             case "assistLaser":
                 document.getElementById("laserButton").value = (value == false) ? "Laser On" : "Laser Off";
                 break;
+            case "minStack":
+                document.getElementById("tdStack").style.display = "table-cell";
+                document.getElementById(key).innerHTML = value;
+                break;
+            case "qrPayload":
+                showQrCode(value);
+                break;
+            case "batteryState":
+                document.getElementById("secPlus2Row").style.display = "table-row";
+                document.getElementById(key).innerHTML = (value == 6) ? "Charging" : (value == 8) ? "Fully&nbsp;Charged" : "Unknown";
+                break;
+            case "openDuration":
+                document.getElementById(key).innerHTML = value + "&nbsp;Seconds";
+                break;
+            case "closeDuration":
+                document.getElementById(key).innerHTML = value + "&nbsp;Seconds";
+                break;
+
             case "freeIramHeap":
-                // Unused... remove this case statement when/if we add to html.
+            case "webRequests":
+            case "webMaxResponseTime":
+            case "openHistory":
+            case "closeHistory":
+                // No-op: Not displayed in UI
                 break;
             default:
                 try {
-                    document.getElementById(key).innerHTML = value;
+                    if (setGDOcmds[key] == undefined) {
+                        // Only try and set if the key is not a setGDO command
+                        document.getElementById(key).innerHTML = value;
+                    }
                 } catch (error) {
-                    console.warn(`Server sent unrecognized status key: ${key}`);
+                    console.warn(`Server sent unrecognized status: ${key} : ${value}`);
                 }
         }
     }
@@ -333,72 +623,110 @@ async function checkStatus() {
     // clean up any awaiting timeouts...
     clearTimeout(checkHeartbeat);
     while (delayStatusFn.length) clearTimeout(delayStatusFn.pop());
-    try {
-        const response = await fetch("status.json")
+
+    loaderElem.style.visibility = "visible";
+    console.log("Start loading server logs and status");
+
+    function checkCondition(condition) {
+        return new Promise((resolve, reject) => {
+            if (condition) {
+                // If the condition is true, resolve the Promise
+                resolve("Operation successful!");
+            } else {
+                // If the condition is false, reject the Promise
+                reject("Operation failed: condition not met.");
+            }
+        });
+    }
+
+    Promise.allSettled([
+        fetch("status.json")
+            .then((response) => {
+                if (!response.ok || response.status !== 200) {
+                    throw new Error(`HTTP error: ${response.status}`);
+                } else {
+                    return response.text();
+                }
+            })
+            .then((text) => {
+                serverStatus = JSON.parse(text);
+                console.log(serverStatus);
+                serverStatus = { ...serverStatus, ...setGDOcmds }; // merge-in setGDO command constants
+                // Add letter 'v' to front of returned firmware version.
+                // Hack because firmware uses v0.0.0 and 0.0.0 for different purposes.
+                serverStatus.firmwareVersion = "v" + serverStatus.firmwareVersion;
+                setElementsFromStatus(serverStatus);
+                checkVersion(); // call this only after we have retrieved status from server
+            })
             .catch((error) => {
                 console.warn(`Promise rejection error fetching status from RATGDO, try again in 5 seconds: ${error}`);
-                throw ("Promise rejection");
-            });
-        if (!response.ok || response.status !== 200) {
-            console.warn(`Error RC ${response.status} fetching status from RATGDO, try again in 5 seconds.`);
-            throw ("Error RC");
-        }
-        serverStatus = await response.json();
-    }
-    catch {
-        delayStatusFn.push(setTimeout(checkStatus, 5000));
-        return;
-    }
-    console.log(serverStatus);
-    // Add letter 'v' to front of returned firmware version.
-    // Hack because firmware uses v0.0.0 and 0.0.0 for different purposes.
-    serverStatus.firmwareVersion = "v" + serverStatus.firmwareVersion;
+                delayStatusFn.push(setTimeout(checkStatus, 5000));
+            }),
 
-    setElementsFromStatus(serverStatus);
-    // Use Server Sent Events to keep status up-to-date, 2 == CLOSED
-    if (!evtSource || evtSource.readyState == 2) {
-        const evtResponse = await fetch("rest/events/subscribe?id=" + clientUUID);
-        if (evtResponse.status !== 200) {
-            console.warn("Error registering for Server Sent Events");
-            return;
-        }
-        const evtUrl = (await evtResponse.text()) + '?id=' + clientUUID;
+        checkCondition((!evtSource || evtSource.readyState == 2))
+            .then((text) => {
+                fetch("rest/events/subscribe?id=" + clientUUID)
+                    .then((response) => {
+                        if (!response.ok || response.status !== 200) {
+                            throw new Error(`HTTP error: ${response.status}`);
+                        } else {
+                            return response.text();
+                        }
+                    })
+                    .then((text) => {
+                        const evtUrl = text + '?id=' + clientUUID;
+                        console.log(`Register for server sent events at ${evtUrl}`);
+                        evtSource = new EventSource(evtUrl);
+                        evtSource.addEventListener("message", (event) => {
+                            //console.log(`Message received: ${event.data}`);
+                            clearTimeout(checkHeartbeat);
+                            checkHeartbeat = setTimeout(() => {
+                                // if no message received since last check then close connection and try again.
+                                console.log(`SSE timeout, no message received in 30 seconds. Last upTime: ${serverStatus.upTime} (${msToTime(serverStatus.upTime)})`);
+                                evtSource.close();
+                                delayStatusFn.push(setTimeout(checkStatus, 1000));
+                            }, 30000);
+                            try {
+                                var msgJson = JSON.parse(event.data);
+                                serverStatus = { ...serverStatus, ...msgJson };
+                                // Update the HTML for those values that were present in the message...
+                                setElementsFromStatus(msgJson);
+                            } catch {
+                                console.warn(`Error parsing JSON: ${event.data}`);
+                            }
+                        });
+                        evtSource.addEventListener("logger", (event) => {
+                            console.log(event.data);
+                        });
+                        evtSource.addEventListener("uploadStatus", (event) => {
+                            //console.log(event.data);
+                            let msgJson = JSON.parse(event.data);
+                            let spanPercent = document.getElementById("updatePercent");
+                            spanPercent.style.display = 'initial';
+                            spanPercent.innerHTML = msgJson.uploadPercent.toString() + '%&nbsp';
+                        });
+                        evtSource.addEventListener("error", (event) => {
+                            // If an error occurs close the connection, then wait 5 seconds and try again.
+                            console.warn(`SSE error while attempting to connect to ${evtSource.url}`);
+                            evtSource.close();
+                            delayStatusFn.push(setTimeout(checkStatus, 5000));
+                        });
 
-        console.log(`Register for server sent events at ${evtUrl}`);
-        evtSource = new EventSource(evtUrl);
-        evtSource.addEventListener("message", (event) => {
-            //console.log(`Message received: ${event.data}`);
-            clearTimeout(checkHeartbeat);
-            checkHeartbeat = setTimeout(() => {
-                // if no message received since last check then close connection and try again.
-                console.log(`SSE timeout, no message received in 30 seconds. Last upTime: ${serverStatus.upTime} (${msToTime(serverStatus.upTime)})`);
-                evtSource.close();
-                delayStatusFn.push(setTimeout(checkStatus, 1000));
-            }, 30000);
-            var msgJson = JSON.parse(event.data);
-            serverStatus = { ...serverStatus, ...msgJson };
-            // Update the HTML for those values that were present in the message...
-            setElementsFromStatus(msgJson);
+                    })
+                    .catch((error) => {
+                        console.warn(`Error registering for Server Sent Events, RC: ${error}`);
+                    });
+            })
+            .catch((error) => {
+                console.log(`SSE already setup at ${evtSource.url}, State: ${evtSource.readyState}`);
+            }),
+    ])
+        .then((results) => {
+            // Once all loaded reset the progress indicator
+            loaderElem.style.visibility = "hidden";
+            // console.log(results);
         });
-        evtSource.addEventListener("logger", (event) => {
-            console.log(event.data);
-        });
-        evtSource.addEventListener("uploadStatus", (event) => {
-            //console.log(event.data);
-            let msgJson = JSON.parse(event.data);
-            let spanPercent = document.getElementById("updatePercent");
-            spanPercent.style.display = 'initial';
-            spanPercent.innerHTML = msgJson.uploadPercent.toString() + '%&nbsp';
-        });
-        evtSource.addEventListener("error", (event) => {
-            // If an error occurs close the connection, then wait 5 seconds and try again.
-            console.log(`SSE error occurred while attempting to connect to ${evtSource.url}`);
-            evtSource.close();
-            delayStatusFn.push(setTimeout(checkStatus, 5000));
-        });
-    } else {
-        console.log(`SSE already setup at ${evtSource.url}, State: ${evtSource.readyState}`);
-    }
+
     return;
 };
 
@@ -417,7 +745,7 @@ function dotDotDot(elem) {
     }, 500);
 }
 
-async function checkVersion(progress) {
+async function checkVersion(progress = "dotdot1") {
     const versionElem = document.getElementById("newversion");
     const versionElem2 = document.getElementById("newversion2");
     var msg = "Checking";
@@ -425,7 +753,7 @@ async function checkVersion(progress) {
     versionElem2.innerHTML = msg;
     const spanDots = document.getElementById(progress);
     const aniDots = dotDotDot(spanDots);
-    const response = await fetch("https://api.github.com/repos/gelidusresearch/homekit-ratgdo32/releases", {
+    const response = await fetch("https://api.github.com/repos/" + gitUser + "/" + gitRepo + "/releases", {
         method: "GET",
         cache: "no-cache",
         redirect: "follow"
@@ -453,13 +781,43 @@ async function checkVersion(progress) {
     if (latest) {
         console.log("Newest version: " + latest.tag_name);
         const asset = latest.assets.find((obj) => {
-            return (obj.content_type === "application/octet-stream") && obj.name.startsWith("homekit-grgdo1") && obj.name.includes("firmware");
+            if (gitRepo == "homekit-ratgdo32") {
+                // Filter by hardware revision (default to rev2 if not set)
+                const hwRev = serverStatus.hardwareRevision || "rev2";
+                console.log(`Searching for firmware matching hardware revision: ${hwRev}`);
+
+                // Check for firmware with hardware revision in name (new format)
+                const hasRevisionMatch = (obj.content_type === "application/octet-stream") &&
+                       (obj.name.startsWith("homekit-grgdo1") &&
+                        obj.name.includes("firmware") &&
+                        obj.name.includes(hwRev));
+
+                // Fallback: Check for firmware without hardware revision (old format)
+                const hasGenericMatch = (obj.content_type === "application/octet-stream") &&
+                       (obj.name.startsWith("homekit-grgdo1") &&
+                        obj.name.includes("firmware") &&
+                        !obj.name.includes("rev1") &&
+                        !obj.name.includes("rev2"));
+
+                return hasRevisionMatch || hasGenericMatch;
+            } else {
+                return (obj.content_type === "application/octet-stream") && (obj.name.startsWith(gitRepo));
+            }
         });
-        serverStatus.downloadURL = "https://gelidusresearch.github.io/homekit-ratgdo32/firmware/" + asset.name;
-        msg = "You have newest release";
-        if (serverStatus.firmwareVersion < latest.tag_name) {
-            // Newest version at GitHub is greater from that installed
-            msg = "Update available  (" + latest.tag_name + ")";
+        if (latest?.body) {
+            document.getElementById("firmwareDescription").innerHTML = marked.parse(latest.body);
+        }
+        if (asset?.name) {
+            serverStatus.downloadURL = "https://gelidusresearch.github.io/homekit-ratgdo32/firmware/" + asset.name;
+            msg = "You have newest release";
+            if (serverStatus.firmwareVersion < latest.tag_name) {
+                // Newest version at GitHub is greater from that installed
+                msg = "Update available  (" + latest.tag_name + ")";
+            }
+        } else {
+            console.warn("No firmware matching CPU architecture found");
+            serverStatus.downloadURL = undefined;
+            msg = "No firmware found";
         }
     }
     else {
@@ -616,15 +974,15 @@ async function firmwareUpdate(github = true) {
             }
             return;
         }
-        // Upload and verify suceeded, so reboot...
+        // Upload and verify succeeded, so reboot...
         rebootRATGDO(false);
         rebootMsg = "Update complete...";
     }
     finally {
         clearInterval(aniDots);
         if (showRebootMsg) {
-            // Additional 10 seconds for new firmware copy on first boot.
-            countdown(rebootSeconds, rebootMsg + "<br>RATGDO device rebooting...&nbsp;");
+            // Additional 10 seconds for ESP8266 new firmware copy on first boot.
+            countdown((isESP8266) ? rebootSeconds + 10 : rebootSeconds, rebootMsg + "<br>RATGDO device rebooting...&nbsp;");
         } else {
             document.getElementById("updateDotDot").style.display = "none";
             document.getElementById("updateDialog").style.display = "block";
@@ -692,11 +1050,16 @@ async function setGDO(...args) {
         const formData = new FormData();
         for (let i = 0; i < args.length; i = i + 2) {
             // Only transmit setting if value has changed
-            if (serverStatus[args[i]] != args[i + 1]) {
+            if (args[i] == "credentials") {
+                console.log(`Key: ${args[i]}, Current Value: REDACTED`);
+            } else {
+                console.log(`Key: ${args[i]}, Current Value: ${serverStatus[args[i]]}`);
+            }
+            if ((serverStatus[args[i]] != undefined) && (serverStatus[args[i]] != args[i + 1])) {
                 console.log(`Set: ${args[i]} to: ${args[i + 1]}`);
                 formData.append(args[i], args[i + 1]);
-                // Update local copy with what we are sending to ratgdo.
-                serverStatus[args[i]] = args[i + 1];
+                // Local copy of server status will be updated when server later reports status.
+                // serverStatus[args[i]] = args[i + 1];
             }
         }
         if (Array.from(formData.keys()).length > 0) {
@@ -757,7 +1120,6 @@ async function changePassword() {
     // MD5() function expects a Uint8Array typed ArrayBuffer...
     const passwordHash = MD5((new TextEncoder).encode(www_username + ":" + www_realm + ":" + newPW.value));
     console.log("Set new credentials to: " + passwordHash);
-    // await setGDO("credentials", passwordHash);
     await setGDO("credentials", JSON.stringify({
         username: www_username,
         credentials: passwordHash,
@@ -782,47 +1144,90 @@ function getMotionTriggers() {
 }
 
 function setMotionTriggers(bitset) {
+    //document.getElementById("motionLabel").style.display = (bitset) ? "table-cell" : "none";
+    //document.getElementById("garageMotion").style.display = (bitset) ? "table-cell" : "none";
     document.getElementById("motionMotion").checked = (bitset & 1) ? true : false;
     document.getElementById("motionObstruction").checked = (bitset & 2) ? true : false;
-    //document.getElementById("motionLight").checked = (bitset & 4) ? true : false;
-    //document.getElementById("motionDoor").checked = (bitset & 8) ? true : false;
-    //document.getElementById("motionLock").checked = (bitset & 16) ? true : false;
     document.getElementById("motionWallPanel").checked = (bitset & 28) ? true : false;
+    // Hide checkbox to trigger motion from wall panel, because not implemented with GDOLIB
+    //document.getElementById("motionWallPanelSpan").style.display = "none";
+    //document.getElementById("trOccupancyDuration").style.display = (bitset) ? "table-row" : "none";
 };
 
 async function saveSettings() {
-    if (!confirm('Save Settings. Reboot may be required, are you sure?')) {
+    let TTCseconds = Math.max(parseInt(document.getElementById("TTCseconds").value), 0);
+    if (isNaN(TTCseconds)) TTCseconds = 0;
+    TTCseconds = (TTCseconds <= 10) ? TTCseconds : (TTCseconds <= 20) ? ((TTCseconds - 10) * 5) + 10 : 300;
+    let msg = (TTCseconds < 5) ? "WARNING: You have requested a time-to-close delay of less than 5 seconds.\n\n" +
+        "This violates US Consumer Product Safety Act Regulations, section 1211.14, unattended operation requirements. " +
+        "By selecting a " + TTCseconds + " seconds delay you accept all responsibility and liability for injury or any other loss.\n\n" : "";
+    let TTClight = '1';
+    if (!document.getElementById("TTClight").checked) {
+        TTClight = '0';
+        if (msg == "") {
+            msg = "WARNING: You have disabled light flashing during time-to-close.\n\n" +
+                "This violates US Consumer Product Safety Act Regulations, section 1211.14, unattended operation requirements. " +
+                "By disabling light flashing you accept all responsibility and liability for injury or any other loss.\n\n";
+        }
+        else {
+            msg = "WARNING: You have disabled light flashing during time-to-close.\n\n" + msg;
+        }
+    }
+    let builtInTTC = Math.max(parseInt(document.getElementById("builtInTTC").value), 0);
+    if (isNaN(builtInTTC)) builtInTTC = 0;
+    builtInTTC = (builtInTTC <= 10) ? builtInTTC * 60 :
+        (builtInTTC <= 20) ? ((builtInTTC - 10) * 300) + 600 : 3600;
+
+    if (!confirm(msg + 'Save Settings. Reboot may be required, are you sure?')) {
         return;
     }
     const gdoSec = (document.getElementById("gdosec1").checked) ? '1'
         : (document.getElementById("gdosec2").checked) ? '2' : '3';
     const pwReq = (document.getElementById("pwreq").checked) ? '1' : '0';
+
     const motionTriggers = getMotionTriggers();
+    let occupancyDuration = Math.max(parseInt(document.getElementById("occupancyDuration").value), 0);
+    if (isNaN(occupancyDuration)) occupancyDuration = 0;
+    occupancyDuration = ((occupancyDuration <= 10) ? occupancyDuration : (occupancyDuration <= 32) ? ((occupancyDuration - 10) * 5) + 10 : 0) * 60; // convert mins to secs
+
     const LEDidle = (document.getElementById("LEDidle2").checked) ? 2
         : (document.getElementById("LEDidle1").checked) ? 1 : 0;
     let rebootHours = Math.max(Math.min(parseInt(document.getElementById("rebootHours").value), 72), 0);
     if (isNaN(rebootHours)) rebootHours = 0;
     let newDeviceName = document.getElementById("newDeviceName").value.substring(0, 30).trim();
     if (newDeviceName.length == 0) newDeviceName = serverStatus.deviceName;
-    /* TODO add support for selecting WiFi PhyMode and WiFi TX Power
     const wifiPhyMode = (document.getElementById("wifiPhyMode3").checked) ? '3'
         : (document.getElementById("wifiPhyMode2").checked) ? '2'
             : (document.getElementById("wifiPhyMode1").checked) ? '1'
                 : '0';
     const wifiPower = Math.max(Math.min(parseInt(document.getElementById("wifiPower").value), 20), 0);
-    */
-    let TTCseconds = Math.max(Math.min(parseInt(document.getElementById("TTCseconds").value), 60), 0);
-    if (isNaN(TTCseconds)) TTCseconds = 0;
-
-    let vehicleThreshold = Math.max(Math.min(parseInt(document.getElementById("vehicleThreshold").value), 200), 5);
+    let vehicleThreshold = Math.max(Math.min(parseInt(document.getElementById("vehicleThreshold").value), 300), 5);
     if (isNaN(vehicleThreshold)) vehicleThreshold = 0;
+    const vehicleHomeKit = (document.getElementById("vehicleHomeKit").checked) ? '1' : '0';
+    const laserEnabled = (document.getElementById("laserEnabled").checked) ? '1' : '0';
+    const laserHomeKit = (document.getElementById("laserHomeKit").checked) ? '1' : '0';
+    const dcOpenClose = (document.getElementById("dcOpenClose").checked) ? '1' : '0';
+    const useSWserial = (document.getElementById("useSWserial").checked) ? '1' : '0';
+    const obstFromStatus = (document.getElementById("obstFromStatus").checked) ? '1' : '0';
+
+    let assistDuration = Math.max(Math.min(parseInt(document.getElementById("assistDuration").value), 300), 0);
+    if (isNaN(assistDuration)) assistDuration = 0;
+
+    let dcDebounceDuration = Math.max(Math.min(parseInt(document.getElementById("dcDebounceDuration").value), 1000), 50);
+    if (isNaN(dcDebounceDuration)) dcDebounceDuration = 50;
 
     const syslogEn = (document.getElementById("syslogEn").checked) ? '1' : '0';
     let syslogIP = document.getElementById("syslogIP").value.substring(0, 15);
     if (syslogIP.length == 0) syslogIP = serverStatus.syslogIP;
-
     let syslogPort = document.getElementById("syslogPort").value.substring(0, 5);
     if (syslogPort.length == 0 || Number(syslogPort) == 0) syslogPort = serverStatus.syslogPort;
+    const syslogList = document.getElementById("syslogFacility");
+    const syslogFacility = Number(syslogList.options[syslogList.selectedIndex].value);
+    const logLevel = (document.getElementById("logLevel5").checked) ? 5
+        : (document.getElementById("logLevel4").checked) ? 4
+            : (document.getElementById("logLevel3").checked) ? 3
+                : (document.getElementById("logLevel2").checked) ? 2
+                    : (document.getElementById("logLevel1").checked) ? 1 : 0;
 
     const staticIP = (document.getElementById("staticIP").checked) ? '1' : '0';
     let localIP = document.getElementById("IPaddress").value.substring(0, 15);
@@ -834,11 +1239,14 @@ async function saveSettings() {
     let nameserverIP = document.getElementById("IPnameserver").value.substring(0, 15);
     if (nameserverIP.length == 0) nameserverIP = serverStatus.nameserverIP;
     const enableNTP = (document.getElementById("enableNTP").checked) ? '1' : '0';
+    const enableIPv6 = (document.getElementById("enableIPv6").checked) ? '1' : '0';
     const list = document.getElementById("timeZoneInput");
     const timeZone = list.options[list.selectedIndex].text + ';' + list.options[list.selectedIndex].value;
+    const homespanCLI = (document.getElementById("homespanCLI").checked) ? '1' : '0';
 
     // check IP addresses valid
     const regexIPv4 = /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/i;
+
     if (!(regexIPv4.test(localIP) && regexIPv4.test(subnetMask) && regexIPv4.test(gatewayIP) && regexIPv4.test(nameserverIP) && regexIPv4.test(syslogIP))) {
         console.error(`Invalid IP address(s): ${localIP} / ${subnetMask} / ${gatewayIP} / ${nameserverIP} / ${syslogIP}`);
         alert(`Invalid IP address(s): ${localIP} / ${subnetMask} / ${gatewayIP} / ${nameserverIP} / ${syslogIP}`);
@@ -849,13 +1257,19 @@ async function saveSettings() {
         "passwordRequired", pwReq,
         "rebootSeconds", (rebootHours * 60 * 60),
         "deviceName", newDeviceName,
-        /* TODO add support for selecting WiFi PhyMode and WiFi TX Power
         "wifiPhyMode", wifiPhyMode,
         "wifiPower", wifiPower,
-        */
         "TTCseconds", TTCseconds,
+        "builtInTTC", builtInTTC,
+        "TTClight", TTClight,
         "vehicleThreshold", vehicleThreshold,
+        "vehicleHomeKit", vehicleHomeKit,
+        "laserEnabled", laserEnabled,
+        "laserHomeKit", laserHomeKit,
+        "dcOpenClose", dcOpenClose,
+        "assistDuration", assistDuration,
         "motionTriggers", motionTriggers,
+        "occupancyDuration", occupancyDuration,
         "LEDidle", LEDidle,
         "staticIP", staticIP,
         "localIP", localIP,
@@ -863,10 +1277,17 @@ async function saveSettings() {
         "gatewayIP", gatewayIP,
         "nameserverIP", nameserverIP,
         "enableNTP", enableNTP,
+        "enableIPv6", enableIPv6,
         "timeZone", timeZone,
         "syslogEn", syslogEn,
         "syslogIP", syslogIP,
-        "syslogPort", syslogPort
+        "syslogPort", syslogPort,
+        "syslogFacility", syslogFacility,
+        "logLevel", logLevel,
+        "useSWserial", useSWserial,
+        "obstFromStatus", obstFromStatus,
+        "dcDebounceDuration", dcDebounceDuration,
+        "homespanCLI", homespanCLI,
     );
     if (reboot) {
         countdown(rebootSeconds, "Settings saved, RATGDO device rebooting...&nbsp;");
@@ -879,7 +1300,7 @@ async function saveSettings() {
 }
 
 async function resetDoor() {
-    if (confirm('Reset door rolling codes and presence of motion sensor. Settings will not change but device will reboot, are you sure?')) {
+    if (confirm('Reset door open/close history, rolling codes and presence of motion sensor. Settings will not change but device will reboot, are you sure?')) {
         await setGDO("resetDoor", true);
         countdown(rebootSeconds, "Door reset, RATGDO device rebooting...&nbsp;");
     }
@@ -949,7 +1370,7 @@ function swipeCheck() {
     }
 }
 function isPullDown(dY, dX) {
-    // methods of checking slope, length, direction of line created by swipe action 
+    // methods of checking slope, length, direction of line created by swipe action
     return dY < 0 && (
         (Math.abs(dX) <= 100 && Math.abs(dY) >= 300)
         || (Math.abs(dX) / Math.abs(dY) <= 0.3 && dY >= 60)

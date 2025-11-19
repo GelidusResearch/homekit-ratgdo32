@@ -3,18 +3,18 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2024-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
  */
-
+#ifdef RATGDO32_DISCO
 // C/C++ language includes
-// None
+#include <bitset>
 
 // Arduino includes
 #include <Wire.h>
-#include <vl53l4cx_class.h>
+#include <vl53l1x_class.h>
 #include "Ticker.h"
 
 // RATGDO project includes
@@ -27,10 +27,12 @@
 // Logger tag
 static const char *TAG = "ratgdo-vehicle";
 bool vehicle_setup_done = false;
+bool vehicle_setup_error = false;
 
-VL53L4CX distanceSensor(&Wire, SHUTDOWN_PIN);
+VL53L1X distanceSensor(&Wire, SENSOR_SHUTDOWN_PIN);
 
-static const int MIN_DISTANCE = 20; // ignore bugs crawling on the distance sensor
+static const int MIN_DISTANCE = 25;   // ignore bugs crawling on the distance sensor
+static const int MAX_DISTANCE = 4500; // 4.5 meters, maximum range of the sensor
 
 int16_t vehicleDistance = 0;
 int16_t vehicleThresholdDistance = 1000; // set by user
@@ -40,41 +42,131 @@ bool vehicleStatusChange = false;
 static bool vehicleDetected = false;
 static bool vehicleArriving = false;
 static bool vehicleDeparting = false;
-static unsigned long lastChangeAt = 0;
-static unsigned long presence_timer = 0; // to be set by door open action
-static unsigned long vehicle_motion_timer = 0;
+static _millis_t lastChangeAt = 0;
+static _millis_t presence_timer = 0; // to be set by door open action
+static _millis_t vehicle_motion_timer = 0;
+
+static constexpr uint32_t PRESENCE_DETECT_DURATION = (5 * 60 * 1000); // how long to calculate presence after door state change
+#define NEW_LOGIC
+#ifdef NEW_LOGIC
+// increasing these values increases reliability but also increases detection time
+static constexpr uint32_t PRESENCE_DETECTION_ON_THRESHOLD = 5; // Minimum percentage of valid samples required to detect vehicle
+static constexpr uint32_t PRESENCE_DETECTION_OFF_DEBOUNCE = 2; // The number of consecutive iterations that must be 0 before clearing vehicle detected state
+
+static constexpr uint32_t VEHICLE_AVERAGE_OVER = 10; // vehicle distance measure is averaged over last 10 samples
+static std::bitset<256> distanceInRange;             // the length of this bitset determines how many out of range readings are required for presence detection to change states
+#else
 static std::vector<int16_t> distanceMeasurement(20, -1);
+#endif
 
 void calculatePresence(int16_t distance);
 
 void setup_vehicle()
 {
-    VL53L4CX_Error rc = VL53L4CX_ERROR_NONE;
-    RINFO(TAG, "=== Setup VL53L4CX time-of-flight sensor ===");
+    uint8_t status = 0;
 
-    Wire.begin(19, 18);
+    if (vehicle_setup_done || vehicle_setup_error)
+        return;
+
+    ESP_LOGI(TAG, "=== Setup VL53L1X time-of-flight sensor ===");
+
+#ifdef GRGDO1_V1
+    // GRGDO1 v1: Serial pins conflict with I2C pins, redirect to Serial1
+    Serial1.begin(115200);
+    Serial.end();
+    Serial = Serial1;
+#endif
+
+    if (!Wire.begin(SENSOR_SDA_PIN, SENSOR_SCL_PIN))
+    {
+        ESP_LOGE(TAG, "VL53L1X I2C pin setup failed");
+        vehicle_setup_error = true;
+#ifdef GRGDO1_V1
+        // Restore Serial to UART0 for Improv
+        Serial1.end();
+        Serial0.begin(115200);
+        Serial = Serial0;
+#endif
+        return;
+    }
+    
+    // Check if sensor is present at I2C address 0x29
+    Wire.beginTransmission(0x29);
+    if (Wire.endTransmission() != 0)
+    {
+        ESP_LOGE(TAG, "VL53L1X ToF not detected at address 0x29");
+        Wire.end();
+        vehicle_setup_error = true;
+#ifdef GRGDO1_V1
+        // Restore Serial to UART0 for Improv
+        Serial1.end();
+        Serial0.begin(115200);
+        Serial = Serial0;
+#endif
+        return;
+    }
+    ESP_LOGI(TAG, "VL53L1X ToF detected at address 0x29");
+    
+    // Initialize sensor
     distanceSensor.begin();
-    rc = distanceSensor.InitSensor(0x59);
-    if (rc != VL53L4CX_ERROR_NONE)
+    
+    // Power off sensor first
+    distanceSensor.VL53L1X_Off();
+    delay(10); // Wait for sensor to power down
+    
+    // Power on sensor
+    distanceSensor.VL53L1X_On();
+    delay(10); // Wait for sensor to power up
+    
+    // Initialize sensor with default I2C address (0x29 in 7-bit, which is 0x52 in 8-bit)
+    status = distanceSensor.InitSensor(0x29 << 1);
+    if (status != 0)
     {
-        RERROR(TAG, "VL53L4CX failed to initialize error: %d", rc);
+        ESP_LOGE(TAG, "VL53L1X failed to initialize error: %d", status);
+        Wire.end();
+        vehicle_setup_error = true;
+#ifdef GRGDO1_V1
+        // Restore Serial to UART0 for Improv
+        Serial1.end();
+        Serial0.begin(115200);
+        Serial = Serial0;
+#endif
         return;
     }
-    rc = distanceSensor.VL53L4CX_SetDistanceMode(VL53L4CX_DISTANCEMODE_LONG);
-    if (rc != VL53L4CX_ERROR_NONE)
+    
+    status = distanceSensor.VL53L1X_SetDistanceMode(2); // 2 = Long distance mode (up to 4m)
+    if (status != 0)
     {
-        RERROR(TAG, "VL53L4CX_SetDistanceMode error: %d", rc);
+        ESP_LOGE(TAG, "VL53L1X_SetDistanceMode error: %d", status);
+        vehicle_setup_error = true;
         return;
     }
-    rc = distanceSensor.VL53L4CX_StartMeasurement();
-    if (rc != VL53L4CX_ERROR_NONE)
+    status = distanceSensor.VL53L1X_SetTimingBudgetInMs(100); // Set timing budget to 100ms
+    if (status != 0)
     {
-        RERROR(TAG, "VL53L4CX_StartMeasurement error: %d", rc);
+        ESP_LOGE(TAG, "VL53L1X_SetTimingBudgetInMs error: %d", status);
+        vehicle_setup_error = true;
+        return;
+    }
+    status = distanceSensor.VL53L1X_SetInterMeasurementInMs(100); // Set inter-measurement period to 100ms
+    if (status != 0)
+    {
+        ESP_LOGE(TAG, "VL53L1X_SetInterMeasurementInMs error: %d", status);
+        vehicle_setup_error = true;
+        return;
+    }
+    status = distanceSensor.VL53L1X_StartRanging();
+    if (status != 0)
+    {
+        ESP_LOGE(TAG, "VL53L1X_StartRanging error: %d", status);
+        vehicle_setup_error = true;
         return;
     }
 
-    enable_service_homekit_vehicle();
+    garage_door.has_distance_sensor = true;
+    nvRam->write(nvram_has_distance, 1);
     vehicleThresholdDistance = userConfig->getVehicleThreshold() * 10; // convert centimeters to millimeters
+    enable_service_homekit_vehicle(userConfig->getVehicleHomeKit());
     vehicle_setup_done = true;
 }
 
@@ -84,33 +176,87 @@ void vehicle_loop()
         return;
 
     uint8_t dataReady = 0;
-    if ((distanceSensor.VL53L4CX_GetMeasurementDataReady(&dataReady) == 0) && (dataReady > 0))
+    uint8_t status = 0;
+    if ((status = distanceSensor.VL53L1X_CheckForDataReady(&dataReady)) == 0 && dataReady > 0)
     {
-        VL53L4CX_MultiRangingData_t distanceData;
-        if (distanceSensor.VL53L4CX_GetMultiRangingData(&distanceData) == 0)
+        uint16_t distance_mm = 0;
+        uint8_t rangeStatus = 0;
+        
+        status = distanceSensor.VL53L1X_GetRangeStatus(&rangeStatus);
+        if (status == 0)
         {
-            int16_t dist = 0;
-            // Multiple objects could be found, only record the furthest away
-            for (int i = 0; i < distanceData.NumberOfObjectsFound; i++)
+            status = distanceSensor.VL53L1X_GetDistance(&distance_mm);
+            if (status == 0)
             {
-                if (distanceData.RangeData[i].RangeStatus == 0)
-                    dist = std::max(dist, distanceData.RangeData[i].RangeMilliMeter);
+                int16_t distance = -1;
+                
+                // VL53L1X range status codes:
+                // 0: Valid range
+                // 1: Sigma fail (low confidence)
+                // 2: Signal fail  
+                // 4: Out of bounds (phase)
+                // 7: Wraparound
+                switch (rangeStatus)
+                {
+                case 0: // Valid range
+                    distance = distance_mm;
+                    break;
+                case 1: // Sigma fail
+                    ESP_LOGW(TAG, "Vehicle distance sensor sigma fail. Sensor may be pointing at glass, try repositioning: %dmm", distance_mm);
+                    distance = distance_mm; // Use data but with caution
+                    break;
+                case 2: // Signal fail
+                    ESP_LOGV(TAG, "Vehicle distance signal fail: %dmm", distance_mm);
+                    distance = MAX_DISTANCE; // Assume no object
+                    break;
+                case 4: // Out of bounds
+                    ESP_LOGV(TAG, "Vehicle distance out of bounds: %dmm", distance_mm);
+                    distance = MAX_DISTANCE; // Assume no object
+                    break;
+                case 7: // Wraparound
+                    ESP_LOGV(TAG, "Vehicle distance wrap target fail: %dmm", distance_mm);
+                    break;
+                default:
+                    ESP_LOGE(TAG, "Unhandled VL53L1X Range Status: %d, Range: %dmm", rangeStatus, distance_mm);
+                    break;
+                }
+                
+                if (distance >= 0)
+                {
+                    calculatePresence(distance);
+                }
             }
-            // If a distance found, add it to our vehicle presence vector.
-            if (dist > 0)
-                calculatePresence(dist);
-            distanceSensor.VL53L4CX_ClearInterruptAndStartMeasurement();
+            else
+            {
+                ESP_LOGE(TAG, "VL53L1X_GetDistance reports error: %d", status);
+            }
+        }
+        else
+        {
+            ESP_LOGE(TAG, "VL53L1X_GetRangeStatus reports error: %d", status);
+        }
+        
+        // Clear the interrupt
+        status = distanceSensor.VL53L1X_ClearInterrupt();
+        if (status != 0)
+        {
+            ESP_LOGV(TAG, "VL53L1X_ClearInterrupt reports error: %d", status);
         }
     }
+    else
+    {
+        if (status != 0)
+            ESP_LOGE(TAG, "VL53L1X_CheckForDataReady reports error: %d", status);
+    }
 
-    unsigned long current_millis = millis();
+    _millis_t current_millis = _millis();
     // Vehicle Arriving Clear Timer
     if (vehicleArriving && (current_millis > vehicle_motion_timer))
     {
         vehicleArriving = false;
         strlcpy(vehicleStatus, vehicleDetected ? "Parked" : "Away", sizeof(vehicleStatus));
         vehicleStatusChange = true;
-        RINFO(TAG, "Vehicle status: %s", vehicleStatus);
+        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
         notify_homekit_vehicle_arriving(vehicleArriving);
     }
     // Vehicle Departing Clear Timer
@@ -119,13 +265,22 @@ void vehicle_loop()
         vehicleDeparting = false;
         strlcpy(vehicleStatus, vehicleDetected ? "Parked" : "Away", sizeof(vehicleStatus));
         vehicleStatusChange = true;
-        RINFO(TAG, "Vehicle status: %s", vehicleStatus);
+        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
         notify_homekit_vehicle_departing(vehicleDeparting);
     }
 }
 
 void setArriveDepart(bool vehiclePresent)
 {
+    static bool lastVehiclePresent = false;
+    static bool doneOnce = false;
+
+    if (doneOnce && vehiclePresent == lastVehiclePresent)
+        return;
+
+    // Only continue if the vehicle presence state has changed, or we don't know previous state.
+    lastVehiclePresent = vehiclePresent;
+    doneOnce = true;
     if (vehiclePresent)
     {
         if (!vehicleArriving)
@@ -134,7 +289,8 @@ void setArriveDepart(bool vehiclePresent)
             vehicleDeparting = false;
             vehicle_motion_timer = lastChangeAt + MOTION_TIMER_DURATION;
             strlcpy(vehicleStatus, "Arriving", sizeof(vehicleStatus));
-            laser.flash(PARKING_ASSIST_TIMEOUT);
+            if (userConfig->getAssistDuration() > 0)
+                laser.flash(userConfig->getAssistDuration() * 1000);
             notify_homekit_vehicle_arriving(vehicleArriving);
         }
     }
@@ -156,6 +312,44 @@ void calculatePresence(int16_t distance)
     if (distance < MIN_DISTANCE)
         return;
 
+    // Test for change in vehicle presence
+    bool priorVehicleDetected = vehicleDetected;
+
+#ifdef NEW_LOGIC
+    distanceInRange <<= 1;
+    distanceInRange.set(0, distance <= vehicleThresholdDistance);
+    uint32_t percent = distanceInRange.count() * 100 / distanceInRange.size();
+    static uint32_t last_percent = UINT32_MAX;
+    static uint32_t off_counter = 0;
+
+    if (percent >= PRESENCE_DETECTION_ON_THRESHOLD)
+        vehicleDetected = true;
+    else if (percent == 0 && vehicleDetected)
+    {
+        off_counter++;
+        ESP_LOGV(TAG, "Vehicle distance off_counter: %d", off_counter);
+        if (off_counter / distanceInRange.size() >= PRESENCE_DETECTION_OFF_DEBOUNCE)
+        {
+            off_counter = 0;
+            vehicleDetected = false;
+        }
+    }
+
+    if (percent != last_percent)
+    {
+        last_percent = percent;
+        off_counter = 0;
+        ESP_LOGV(TAG, "Vehicle distance in-range: %d%%", percent);
+    }
+
+    // calculate average over sample size to smooth out changes
+    static int16_t average = 0;
+    static uint32_t count = 0;
+    count++;
+    average = average + ((distance - average) / static_cast<int16_t>(std::min(count, VEHICLE_AVERAGE_OVER)));
+    // convert from millimeters to centimeters
+    vehicleDistance = average / 10;
+#else
     bool allInRange = true;
     bool AllOutOfRange = true;
     int32_t sum = 0;
@@ -174,18 +368,17 @@ void calculatePresence(int16_t distance)
     // and convert from millimeters to centimeters
     vehicleDistance = sum / distanceMeasurement.size() / 10;
 
-    // Test for change in vehicle presence
-    bool priorVehicleDetected = vehicleDetected;
     if (allInRange)
         vehicleDetected = true;
     if (AllOutOfRange)
         vehicleDetected = false;
+#endif
+
     if (vehicleDetected != priorVehicleDetected)
     {
-        led.flash();
         // if change occurs with arrival/departure window then record motion,
         // presence timer is set when door opens.
-        lastChangeAt = millis();
+        lastChangeAt = _millis();
         if (lastChangeAt < presence_timer)
         {
             setArriveDepart(vehicleDetected);
@@ -195,7 +388,7 @@ void calculatePresence(int16_t distance)
             strlcpy(vehicleStatus, vehicleDetected ? "Parked" : "Away", sizeof(vehicleStatus));
         }
         vehicleStatusChange = true;
-        RINFO(TAG, "Vehicle status: %s", vehicleStatus);
+        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
         notify_homekit_vehicle_occupancy(vehicleDetected);
     }
 }
@@ -206,7 +399,7 @@ void doorOpening()
     if (!vehicle_setup_done)
         return;
 
-    presence_timer = millis() + PRESENCE_DETECT_DURATION;
+    presence_timer = _millis() + PRESENCE_DETECT_DURATION;
 }
 
 // if notified of door closing, check for arrived/departed vehicle within time window (looking back)
@@ -215,9 +408,10 @@ void doorClosing()
     if (!vehicle_setup_done)
         return;
 
-    if ((millis() > PRESENCE_DETECT_DURATION) && ((millis() - lastChangeAt) < PRESENCE_DETECT_DURATION))
+    if ((_millis() > PRESENCE_DETECT_DURATION) && ((_millis() - lastChangeAt) < PRESENCE_DETECT_DURATION))
     {
         setArriveDepart(vehicleDetected);
-        RINFO(TAG, "Vehicle status: %s", vehicleStatus);
+        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
     }
 }
+#endif // RATGDO32_DISCO

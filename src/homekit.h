@@ -1,9 +1,9 @@
 /****************************************************************************
- * RATGDO HomeKit for ESP32
+ * RATGDO HomeKit
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -14,15 +14,39 @@
  */
 #pragma once
 
-// C/C++ language includes
-// none
-
-// ESP system includes
-// none
-
 // RATGDO project includes
-#include "HomeSpan.h"
+#include "ratgdo.h"
 
+void setup_homekit();
+
+extern void notify_homekit_target_door_state_change(GarageDoorTargetState state);
+extern void notify_homekit_current_door_state_change(GarageDoorCurrentState state);
+extern void notify_homekit_target_lock(LockTargetState state);
+extern void notify_homekit_current_lock(LockCurrentState state);
+extern void notify_homekit_obstruction(bool state);
+extern void notify_homekit_light(bool state);
+extern void enable_service_homekit_motion(bool reboot);
+extern void notify_homekit_motion(bool state);
+
+extern char qrPayload[];
+extern bool homekit_setup_done;
+
+#ifdef ESP8266
+// On ESP8266 we have our own HomeKit module
+void homekit_loop();
+
+#else // not ESP8266
+// One ESP32 we use HomeSpan module.
+// Accessory IDs
+#define HOMEKIT_AID_BRIDGE 1
+#define HOMEKIT_AID_GARAGE_DOOR 2
+#define HOMEKIT_AID_LIGHT_BULB 3
+#define HOMEKIT_AID_MOTION 4
+#define HOMEKIT_AID_ARRIVING 5
+#define HOMEKIT_AID_DEPARTING 6
+#define HOMEKIT_AID_VEHICLE 7
+#define HOMEKIT_AID_LASER 8
+#define HOMEKIT_AID_ROOM_OCCUPANCY 9
 
 enum Light_t : uint8_t
 {
@@ -30,25 +54,19 @@ enum Light_t : uint8_t
     ASSIST_LASER = 2,
 };
 
-void setup_homekit();
-
-extern void notify_homekit_target_door_state_change();
-extern void notify_homekit_current_door_state_change();
-extern void notify_homekit_target_lock();
-extern void notify_homekit_current_lock();
-extern void notify_homekit_obstruction();
-extern void notify_homekit_light();
-extern void enable_service_homekit_motion();
-extern void notify_homekit_motion();
-
 extern void notify_homekit_vehicle_occupancy(bool vehicleDetected);
 extern void notify_homekit_vehicle_arriving(bool vehicleArriving);
 extern void notify_homekit_vehicle_departing(bool vehicleDeparting);
 extern void notify_homekit_laser(bool on);
-extern void enable_service_homekit_vehicle();
+extern void enable_service_homekit_vehicle(bool enable);
+extern bool enable_service_homekit_laser(bool enable);
+extern bool enable_service_homekit_room_occupancy(bool enable);
+extern void notify_homekit_room_occupancy(bool occupied);
 
 extern void homekit_unpair();
 extern bool homekit_is_paired();
+
+extern char ipv6_addresses[];
 
 struct GDOEvent
 {
@@ -77,7 +95,7 @@ struct DEV_GarageDoor : Service::GarageDoorOpener
 
 struct DEV_Info : Service::AccessoryInformation
 {
-    DEV_Info(const char *name);
+    explicit DEV_Info(const char *name);
     boolean update();
 };
 
@@ -88,7 +106,7 @@ struct DEV_Light : Service::LightBulb
     QueueHandle_t event_q;
     Light_t type;
 
-    DEV_Light(Light_t type = Light_t::GDO_LIGHT);
+    explicit DEV_Light(Light_t type = Light_t::GDO_LIGHT);
     boolean update();
     void loop();
 };
@@ -100,7 +118,7 @@ struct DEV_Motion : Service::MotionSensor
     QueueHandle_t event_q;
     char name[16];
 
-    DEV_Motion(const char *name);
+    explicit DEV_Motion(const char *name);
     void loop();
 };
 
@@ -113,3 +131,4 @@ struct DEV_Occupancy : Service::OccupancySensor
     DEV_Occupancy();
     void loop();
 };
+#endif // ESP8266
