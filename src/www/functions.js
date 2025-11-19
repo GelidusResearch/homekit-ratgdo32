@@ -437,6 +437,11 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("firmwareVersion2").innerHTML = value;
                 break;
+            case "hardwareRevision":
+                // Store hardware revision for OTA update filtering
+                serverStatus.hardwareRevision = value;
+                console.log(`Hardware revision: ${value}`);
+                break;
             case "wifiPhyMode":
                 document.getElementById("trWifiPhyMode").style.display = "table-row";
                 document.getElementById("wifiPhyMode0").checked = (value == 0) ? true : false;
@@ -777,7 +782,13 @@ async function checkVersion(progress = "dotdot1") {
         console.log("Newest version: " + latest.tag_name);
         const asset = latest.assets.find((obj) => {
             if (gitRepo == "homekit-ratgdo32") {
-                return (obj.content_type === "application/octet-stream") && (obj.name.startsWith("homekit-grgdo1") && (obj.name.includes("firmware")));
+                // Filter by hardware revision (default to rev2 if not set)
+                const hwRev = serverStatus.hardwareRevision || "rev2";
+                console.log(`Searching for firmware matching hardware revision: ${hwRev}`);
+                return (obj.content_type === "application/octet-stream") && 
+                       (obj.name.startsWith("homekit-grgdo1") && 
+                        obj.name.includes("firmware") && 
+                        obj.name.includes(hwRev));
             } else {
                 return (obj.content_type === "application/octet-stream") && (obj.name.startsWith(gitRepo));
             }

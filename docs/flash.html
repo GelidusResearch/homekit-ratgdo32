@@ -42,12 +42,14 @@
 
     <esp-web-install-button id="install-button" class="invisible" manifest="manifest-rev2.json"></esp-web-install-button>
 	<script>
+		const installButton = document.querySelector('esp-web-install-button');
+		
+		// Handle manual radio button selection
 		document.querySelectorAll('input[name="board-version"]').forEach(radio =>
 			radio.addEventListener("change", () => {
-				const button = document.querySelector('esp-web-install-button');
-				button.manifest = `manifest-${radio.value}.json`;
-				button.classList.remove('invisible');
-				button.overrides = {
+				installButton.manifest = `manifest-${radio.value}.json`;
+				installButton.classList.remove('invisible');
+				installButton.overrides = {
 					checkSameFirmware(manifest, improvInfo) {
 						const manifestFirmware = manifest.name.toLowerCase();
 						const deviceFirmware = improvInfo.firmware.toLowerCase();
@@ -56,6 +58,35 @@
 				};
 			})
 		);
+		
+		// Auto-detect hardware revision when device connects
+		installButton.addEventListener('state-changed', (event) => {
+			if (event.detail.state === 'LOGS') {
+				// Device connected, try to detect hardware revision from logs
+				const logs = event.detail.logs || [];
+				const firmwareLine = logs.find(line => line.includes('Firmware:') || line.includes('ratgdo32'));
+				
+				if (firmwareLine) {
+					console.log('Detected firmware info:', firmwareLine);
+					let detectedRev = 'rev2'; // default
+					
+					if (firmwareLine.includes('rev1')) {
+						detectedRev = 'rev1';
+					} else if (firmwareLine.includes('rev2')) {
+						detectedRev = 'rev2';
+					}
+					
+					console.log('Auto-detected hardware revision:', detectedRev);
+					
+					// Auto-select the correct radio button
+					const targetRadio = document.querySelector(`input[value="${detectedRev}"]`);
+					if (targetRadio && !targetRadio.checked) {
+						targetRadio.checked = true;
+						targetRadio.dispatchEvent(new Event('change'));
+					}
+				}
+			}
+		});
 	</script>
 </body>
 

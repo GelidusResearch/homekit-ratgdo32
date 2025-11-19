@@ -714,6 +714,11 @@ void build_status_json(char *json)
     JSON_ADD_STR("userName", userConfig->getwwwUsername());
     JSON_ADD_BOOL("paired", homekit_is_paired());
     JSON_ADD_STR("firmwareVersion", std::string(AUTO_VERSION).c_str());
+#ifdef GRGDO1_V1
+    JSON_ADD_STR("hardwareRevision", "rev1");
+#else
+    JSON_ADD_STR("hardwareRevision", "rev2");
+#endif
     JSON_ADD_STR(cfg_localIP, userConfig->getLocalIP());
     JSON_ADD_STR(cfg_subnetMask, userConfig->getSubnetMask());
     JSON_ADD_STR(cfg_gatewayIP, userConfig->getGatewayIP());

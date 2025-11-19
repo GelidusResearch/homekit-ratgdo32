@@ -274,7 +274,11 @@ bool onCommandCallback(improv::ImprovCommand cmd)
 #else
         std::vector<std::string> infos = {
             // Firmware name
-            "HomeKit-ratgdo32",
+#ifdef GRGDO1_V1
+            "HomeKit-ratgdo32-rev1",
+#else
+            "HomeKit-ratgdo32-rev2",
+#endif
             // Firmware version
             AUTO_VERSION,
             // Hardware chip/variant
