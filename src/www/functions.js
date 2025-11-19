@@ -785,10 +785,21 @@ async function checkVersion(progress = "dotdot1") {
                 // Filter by hardware revision (default to rev2 if not set)
                 const hwRev = serverStatus.hardwareRevision || "rev2";
                 console.log(`Searching for firmware matching hardware revision: ${hwRev}`);
-                return (obj.content_type === "application/octet-stream") &&
+
+                // Check for firmware with hardware revision in name (new format)
+                const hasRevisionMatch = (obj.content_type === "application/octet-stream") &&
                        (obj.name.startsWith("homekit-grgdo1") &&
                         obj.name.includes("firmware") &&
                         obj.name.includes(hwRev));
+
+                // Fallback: Check for firmware without hardware revision (old format)
+                const hasGenericMatch = (obj.content_type === "application/octet-stream") &&
+                       (obj.name.startsWith("homekit-grgdo1") &&
+                        obj.name.includes("firmware") &&
+                        !obj.name.includes("rev1") &&
+                        !obj.name.includes("rev2"));
+
+                return hasRevisionMatch || hasGenericMatch;
             } else {
                 return (obj.content_type === "application/octet-stream") && (obj.name.startsWith(gitRepo));
             }
