@@ -147,7 +147,7 @@ function toggleDCOpenClose(radio) {
     document.getElementById("dcOpenClose").disabled = (value == 3);
     document.getElementById("obstFromStatus").disabled = (value == 3);
     document.getElementById("useToggle").disabled = (value != 2);
-    document.getElementById("homekitLight").disabled = (value == 3);
+    document.getElementById("lightHomeKit").disabled = (value == 3);
     document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
     document.getElementById("dcDebounceDuration").disabled = (value != 3);
     document.getElementById("motionMotion").disabled = (value != 2);
@@ -406,7 +406,7 @@ function setElementsFromStatus(status) {
                 document.getElementById("dcOpenClose").disabled = (value == 3);
                 document.getElementById("obstFromStatus").disabled = (value == 3);
                 document.getElementById("useToggle").disabled = (value != 2);
-                document.getElementById("homekitLight").disabled = (value == 3);
+                document.getElementById("lightHomeKit").disabled = (value == 3);
                 document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
                 document.getElementById("dcDebounceDuration").disabled = (value != 3);
                 document.getElementById("motionMotion").disabled = (value != 2);
@@ -501,7 +501,7 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).checked = value;
                 document.getElementById("homespanSetting").style.display = "table-row";
                 break;
-            case "homekitLight":
+            case "lightHomeKit":
                 document.getElementById(key).checked = value;
                 document.getElementById("homekitLightRow").style.display = "table-row";
                 break;
@@ -1438,7 +1438,7 @@ async function saveSettings() {
     const list = document.getElementById("timeZoneInput");
     const timeZone = list.options[list.selectedIndex].text + ';' + list.options[list.selectedIndex].value;
     const homespanCLI = (document.getElementById("homespanCLI").checked) ? '1' : '0';
-    const homekitLight = (document.getElementById("homekitLight").checked) ? '1' : '0';
+    const lightHomeKit = (document.getElementById("lightHomeKit").checked) ? '1' : '0';
     const motionHomeKit = (document.getElementById("motionHomeKit").checked) ? '1' : '0';
 
     let dht22Pin = parseInt(document.getElementById("dht22Pin").value);
@@ -1497,7 +1497,7 @@ async function saveSettings() {
         "homespanCLI", homespanCLI,
         "dht22Pin", dht22Pin,
         "dht22TempFormat", dht22TempFormat,
-        "homekitLight", homekitLight,
+        "lightHomeKit", lightHomeKit,
         "motionHomeKit", motionHomeKit,
     );
     if (reboot) {
