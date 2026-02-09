@@ -188,6 +188,12 @@
                     id="vehicleDistInch"></span>&nbsp;inch)</span>
               </td>
             </tr>
+            <tr id="dht22Row" style="display:none;">
+              <td colspan="2">Temperature:</td>
+              <td id="dht22Temp"></td>
+              <td colspan="3">Humidity:</td>
+              <td><span id="dht22Hum"></span></td>
+            </tr>
           </table>
         </div>
         <div id="GDOcontrols" class="fullwidth button-row"
@@ -439,6 +445,25 @@
                       </td>
                     </tr>
                   </table>
+                </td>
+              </tr>
+              <tr>
+                <td colspan="2">&nbsp;</td>
+              </tr>
+              <tr>
+                <td class="label">DHT22 Sensor:</td>
+                <td>&nbsp;
+                  <input type="number" id="dht22Pin" name="dht22Pin" placeholder="-1" min="-1" max="40" size="3" style="width:50px;">
+                  <span style="font-size: 0.8em;">GPIO pin (-1 to disable)</span>
+                </td>
+              </tr>
+              <tr id="dht22TempFormatRow" style="display:none;">
+                <td></td>
+                <td>&nbsp;
+                  <input type="radio" id="tempFormatC" name="tempFormat" value="C" checked>
+                  <label for="tempFormatC">Celsius</label>
+                  <input type="radio" id="tempFormatF" name="tempFormat" value="F">
+                  <label for="tempFormatF">Fahrenheit</label>
                 </td>
               </tr>
               <tr>

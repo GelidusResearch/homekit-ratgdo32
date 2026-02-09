@@ -89,7 +89,7 @@ void setup_vehicle()
 #endif
         return;
     }
-    
+
     // Check if sensor is present at I2C address 0x29
     Wire.beginTransmission(0x29);
     if (Wire.endTransmission() != 0)
@@ -106,18 +106,18 @@ void setup_vehicle()
         return;
     }
     ESP_LOGI(TAG, "VL53L1X ToF detected at address 0x29");
-    
+
     // Initialize sensor
     distanceSensor.begin();
-    
+
     // Power off sensor first
     distanceSensor.VL53L1X_Off();
     delay(10); // Wait for sensor to power down
-    
+
     // Power on sensor
     distanceSensor.VL53L1X_On();
     delay(10); // Wait for sensor to power up
-    
+
     // Initialize sensor with default I2C address (0x29 in 7-bit, which is 0x52 in 8-bit)
     status = distanceSensor.InitSensor(0x29 << 1);
     if (status != 0)
@@ -133,7 +133,7 @@ void setup_vehicle()
 #endif
         return;
     }
-    
+
     status = distanceSensor.VL53L1X_SetDistanceMode(2); // 2 = Long distance mode (up to 4m)
     if (status != 0)
     {
@@ -181,7 +181,7 @@ void vehicle_loop()
     {
         uint16_t distance_mm = 0;
         uint8_t rangeStatus = 0;
-        
+
         status = distanceSensor.VL53L1X_GetRangeStatus(&rangeStatus);
         if (status == 0)
         {
@@ -189,11 +189,11 @@ void vehicle_loop()
             if (status == 0)
             {
                 int16_t distance = -1;
-                
+
                 // VL53L1X range status codes:
                 // 0: Valid range
                 // 1: Sigma fail (low confidence)
-                // 2: Signal fail  
+                // 2: Signal fail
                 // 4: Out of bounds (phase)
                 // 7: Wraparound
                 switch (rangeStatus)
@@ -220,7 +220,7 @@ void vehicle_loop()
                     ESP_LOGE(TAG, "Unhandled VL53L1X Range Status: %d, Range: %dmm", rangeStatus, distance_mm);
                     break;
                 }
-                
+
                 if (distance >= 0)
                 {
                     calculatePresence(distance);
@@ -235,7 +235,7 @@ void vehicle_loop()
         {
             ESP_LOGE(TAG, "VL53L1X_GetRangeStatus reports error: %d", status);
         }
-        
+
         // Clear the interrupt
         status = distanceSensor.VL53L1X_ClearInterrupt();
         if (status != 0)
