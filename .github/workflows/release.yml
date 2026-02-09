@@ -27,9 +27,17 @@ jobs:
             submodules: true
             fetch-depth: 0
 
-      - name: Tag
+      - name: Set Tag Name
         id: tag
-        uses: JinoArch/get-latest-tag@latest
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "latestTag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            echo "latestTag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          else
+            # Default to git describe or fallback
+            echo "latestTag=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
+          fi
 
       - name: Set Revision Name
         id: rev
