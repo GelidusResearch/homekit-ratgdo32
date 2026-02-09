@@ -31,8 +31,8 @@ bool vehicle_setup_error = false;
 
 VL53L1X distanceSensor(&Wire, SENSOR_SHUTDOWN_PIN);
 
-static const int MIN_DISTANCE = 25;   // ignore bugs crawling on the distance sensor
-static const int MAX_DISTANCE = 4500; // 4.5 meters, maximum range of the sensor
+static const int32_t MIN_DISTANCE = 25; // ignore bugs crawling on the distance sensor
+static const int32_t MAX_DISTANCE = 4500; // 4.5 meters, maximum range of the sensor
 
 int16_t vehicleDistance = 0;
 int16_t vehicleThresholdDistance = 1000; // set by user
@@ -42,24 +42,17 @@ bool vehicleStatusChange = false;
 static bool vehicleDetected = false;
 static bool vehicleArriving = false;
 static bool vehicleDeparting = false;
-static _millis_t lastChangeAt = 0;
+_millis_t lastVehicleChangeAt = 0;
 static _millis_t presence_timer = 0; // to be set by door open action
 static _millis_t vehicle_motion_timer = 0;
 
 static constexpr uint32_t PRESENCE_DETECT_DURATION = (5 * 60 * 1000); // how long to calculate presence after door state change
-#define NEW_LOGIC
-#ifdef NEW_LOGIC
 // increasing these values increases reliability but also increases detection time
 static constexpr uint32_t PRESENCE_DETECTION_ON_THRESHOLD = 5; // Minimum percentage of valid samples required to detect vehicle
 static constexpr uint32_t PRESENCE_DETECTION_OFF_DEBOUNCE = 2; // The number of consecutive iterations that must be 0 before clearing vehicle detected state
-
-static constexpr uint32_t VEHICLE_AVERAGE_OVER = 10; // vehicle distance measure is averaged over last 10 samples
-static std::bitset<256> distanceInRange;             // the length of this bitset determines how many out of range readings are required for presence detection to change states
-#else
-static std::vector<int16_t> distanceMeasurement(20, -1);
-#endif
-
-void calculatePresence(int16_t distance);
+static constexpr int32_t VEHICLE_AVERAGE_OVER = 50;            // vehicle distance measure is averaged over last X samples
+static std::bitset<256> distanceInRange;                       // the length of this bitset determines how many out of range readings are required for presence detection to change states
+void calculatePresence(int32_t distance);
 
 void setup_vehicle()
 {
@@ -251,22 +244,22 @@ void vehicle_loop()
 
     _millis_t current_millis = _millis();
     // Vehicle Arriving Clear Timer
-    if (vehicleArriving && (current_millis > vehicle_motion_timer))
+    if (vehicleArriving && (current_millis - vehicle_motion_timer) > MOTION_TIMER_DURATION)
     {
         vehicleArriving = false;
         strlcpy(vehicleStatus, vehicleDetected ? "Parked" : "Away", sizeof(vehicleStatus));
         vehicleStatusChange = true;
-        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
-        notify_homekit_vehicle_arriving(vehicleArriving);
+        ESP_LOGI(TAG, "Vehicle %s at %s", vehicleStatus, timeString());
+        notify_homekit_vehicle_arriving(false);
     }
     // Vehicle Departing Clear Timer
-    if (vehicleDeparting && (current_millis > vehicle_motion_timer))
+    if (vehicleDeparting && (current_millis - vehicle_motion_timer) > MOTION_TIMER_DURATION)
     {
         vehicleDeparting = false;
         strlcpy(vehicleStatus, vehicleDetected ? "Parked" : "Away", sizeof(vehicleStatus));
         vehicleStatusChange = true;
-        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
-        notify_homekit_vehicle_departing(vehicleDeparting);
+        ESP_LOGI(TAG, "Vehicle %s at %s", vehicleStatus, timeString());
+        notify_homekit_vehicle_departing(false);
     }
 }
 
@@ -287,11 +280,13 @@ void setArriveDepart(bool vehiclePresent)
         {
             vehicleArriving = true;
             vehicleDeparting = false;
-            vehicle_motion_timer = lastChangeAt + MOTION_TIMER_DURATION;
+            vehicle_motion_timer = lastVehicleChangeAt;
             strlcpy(vehicleStatus, "Arriving", sizeof(vehicleStatus));
             if (userConfig->getAssistDuration() > 0)
                 laser.flash(userConfig->getAssistDuration() * 1000);
-            notify_homekit_vehicle_arriving(vehicleArriving);
+            vehicleStatusChange = true;
+            ESP_LOGI(TAG, "Vehicle %s at %s", vehicleStatus, timeString());
+            notify_homekit_vehicle_arriving(true);
         }
     }
     else
@@ -300,14 +295,16 @@ void setArriveDepart(bool vehiclePresent)
         {
             vehicleArriving = false;
             vehicleDeparting = true;
-            vehicle_motion_timer = lastChangeAt + MOTION_TIMER_DURATION;
+            vehicle_motion_timer = lastVehicleChangeAt;
             strlcpy(vehicleStatus, "Departing", sizeof(vehicleStatus));
-            notify_homekit_vehicle_departing(vehicleDeparting);
+            vehicleStatusChange = true;
+            ESP_LOGI(TAG, "Vehicle %s at %s", vehicleStatus, timeString());
+            notify_homekit_vehicle_departing(true);
         }
     }
 }
 
-void calculatePresence(int16_t distance)
+void calculatePresence(int32_t distance)
 {
     if (distance < MIN_DISTANCE)
         return;
@@ -315,7 +312,6 @@ void calculatePresence(int16_t distance)
     // Test for change in vehicle presence
     bool priorVehicleDetected = vehicleDetected;
 
-#ifdef NEW_LOGIC
     distanceInRange <<= 1;
     distanceInRange.set(0, distance <= vehicleThresholdDistance);
     uint32_t percent = distanceInRange.count() * 100 / distanceInRange.size();
@@ -323,7 +319,9 @@ void calculatePresence(int16_t distance)
     static uint32_t off_counter = 0;
 
     if (percent >= PRESENCE_DETECTION_ON_THRESHOLD)
+    {
         vehicleDetected = true;
+    }
     else if (percent == 0 && vehicleDetected)
     {
         off_counter++;
@@ -343,52 +341,41 @@ void calculatePresence(int16_t distance)
     }
 
     // calculate average over sample size to smooth out changes
-    static int16_t average = 0;
-    static uint32_t count = 0;
-    count++;
-    average = average + ((distance - average) / static_cast<int16_t>(std::min(count, VEHICLE_AVERAGE_OVER)));
+    static double average = 0;
+    static int32_t count = 0;
+    if (count < VEHICLE_AVERAGE_OVER)
+        count++;
+    // must use double float math, integer math does not work
+    average = average + (static_cast<double>(distance) - average) / count;
     // convert from millimeters to centimeters
-    vehicleDistance = average / 10;
-#else
-    bool allInRange = true;
-    bool AllOutOfRange = true;
-    int32_t sum = 0;
-
-    distanceMeasurement.insert(distanceMeasurement.begin(), distance);
-    distanceMeasurement.pop_back();
-    for (int16_t value : distanceMeasurement)
+    vehicleDistance = static_cast<int16_t>(std::round(average / 10));
+    static int16_t lastDistance = 0;
+    static uint32_t lastChange = 0;
+    lastChange++;
+    if (vehicleDistance != lastDistance)
     {
-        if (value >= vehicleThresholdDistance || value == -1)
-            allInRange = false;
-        if (value < vehicleThresholdDistance && value != -1)
-            AllOutOfRange = false;
-        sum += value;
-    }
-    // calculate average of all distances... to smooth out changes
-    // and convert from millimeters to centimeters
-    vehicleDistance = sum / distanceMeasurement.size() / 10;
 
-    if (allInRange)
-        vehicleDetected = true;
-    if (AllOutOfRange)
-        vehicleDetected = false;
-#endif
+        ESP_LOGD(TAG, "Vehicle distance: %dcm (average over %d samples, last changed %d samples ago), current measured: %dcm", vehicleDistance, count, lastChange, distance / 10);
+        lastDistance = vehicleDistance;
+        lastChange = 0;
+    }
 
     if (vehicleDetected != priorVehicleDetected)
     {
         // if change occurs with arrival/departure window then record motion,
-        // presence timer is set when door opens.
-        lastChangeAt = _millis();
-        if (lastChangeAt < presence_timer)
+        // presence timer is set when door opens or closes.
+        lastVehicleChangeAt = _millis();
+        if (presence_timer && ((lastVehicleChangeAt - presence_timer) < PRESENCE_DETECT_DURATION))
         {
+            presence_timer = 0;
             setArriveDepart(vehicleDetected);
         }
         else
         {
             strlcpy(vehicleStatus, vehicleDetected ? "Parked" : "Away", sizeof(vehicleStatus));
+            ESP_LOGI(TAG, "Vehicle %s at %s", vehicleStatus, timeString());
         }
         vehicleStatusChange = true;
-        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
         notify_homekit_vehicle_occupancy(vehicleDetected);
     }
 }
@@ -399,7 +386,7 @@ void doorOpening()
     if (!vehicle_setup_done)
         return;
 
-    presence_timer = _millis() + PRESENCE_DETECT_DURATION;
+    presence_timer = _millis();
 }
 
 // if notified of door closing, check for arrived/departed vehicle within time window (looking back)
@@ -408,10 +395,11 @@ void doorClosing()
     if (!vehicle_setup_done)
         return;
 
-    if ((_millis() > PRESENCE_DETECT_DURATION) && ((_millis() - lastChangeAt) < PRESENCE_DETECT_DURATION))
+    presence_timer = _millis();
+    // On door closing, the vehicle status change could already have happened...
+    if (lastVehicleChangeAt && ((presence_timer - lastVehicleChangeAt) < PRESENCE_DETECT_DURATION))
     {
         setArriveDepart(vehicleDetected);
-        ESP_LOGI(TAG, "Vehicle status: %s at %s", vehicleStatus, timeString());
     }
 }
 #endif // RATGDO32_DISCO

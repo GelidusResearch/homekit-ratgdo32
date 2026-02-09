@@ -1,19 +1,40 @@
-.ccls
-.cache
-.ccls-cache
-.clang_complete
-.gcc-flags.json
+# PlatformIO
 .pio
 .pioenvs
 .piolibdeps
+lib_deps
+.cache
 compile_commands.json
-__pycache__
+.gcc-flags.json
+.clang_complete
+
+# Python
+.venv/
+venv/
+ENV/
+__pycache__/
+*.py[cod]
+*$py.class
+.python-version
+.env
+.env.local
+
+# OS / IDE
 .DS_Store
-.vscode
-src/www/build
-.vscode/*
+._*
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*.swo
+.history/
+
+# Project specific
+src/www/build/
 CMakeLists.txt
+src/CMakeLists.txt
 dependencies.lock
 managed_components/
 sdkconfig.ratgdo_esp32dev
-src/CMakeLists.txt
+MERGE_NOTES.md

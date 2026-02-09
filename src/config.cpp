@@ -89,6 +89,7 @@ bool setDeviceName(const std::string &key, const char *name, configSetting *acti
     MDNS.setHostname(device_name_rfc952);
 #else
     MDNS.begin(device_name_rfc952);
+    MDNS.setInstanceName(device_name);
 #endif
     return true;
 }
@@ -261,6 +262,27 @@ bool helperVehicleHomeKit(const std::string &key, const char *value, configSetti
     return true;
 }
 
+bool helperVehicleOccupancyHomeKit(const std::string &key, const char *value, configSetting *action)
+{
+    userConfig->set(key, value);
+    enable_service_homekit_vehicle(userConfig->getVehicleHomeKit());
+    return true;
+}
+
+bool helperVehicleArrivingHomeKit(const std::string &key, const char *value, configSetting *action)
+{
+    userConfig->set(key, value);
+    enable_service_homekit_vehicle(userConfig->getVehicleHomeKit());
+    return true;
+}
+
+bool helperVehicleDepartingHomeKit(const std::string &key, const char *value, configSetting *action)
+{
+    userConfig->set(key, value);
+    enable_service_homekit_vehicle(userConfig->getVehicleHomeKit());
+    return true;
+}
+
 bool helperLaser(const std::string &key, const char *value, configSetting *action)
 {
     userConfig->set(key, value);
@@ -294,6 +316,24 @@ bool helperHomeSpanCLI(const std::string &key, const char *value, configSetting 
         disable_improv();
     else
         setup_improv();
+    return true;
+}
+
+// Forward declarations for HomeKit accessory enable/disable functions
+extern bool enable_service_homekit_light(bool enable);
+extern bool enable_service_homekit_motion_sensor(bool enable);
+
+bool helperLightHomeKit(const std::string &key, const char *value, configSetting *action)
+{
+    userConfig->set(key, value);
+    enable_service_homekit_light(userConfig->getLightHomeKit());
+    return true;
+}
+
+bool helperMotionHomeKit(const std::string &key, const char *value, configSetting *action)
+{
+    userConfig->set(key, value);
+    enable_service_homekit_motion_sensor(userConfig->getMotionHomeKit());
     return true;
 }
 #endif // ESP32
@@ -371,11 +411,16 @@ userSettings::userSettings()
         {cfg_syslogFacility, {false, false, SYSLOG_LOCAL0, helperSyslogFacility}}, // call fn to set global
         {cfg_logLevel, {false, false, ESP_LOG_INFO, helperLogLevel}},              // call fn to set log level
         {cfg_dcOpenClose, {true, false, false, NULL}},
+        {cfg_dcBypassTTC, {false, false, false, NULL}},
+        {cfg_useToggle, {false, false, false, NULL}},
         {cfg_dcDebounceDuration, {true, false, 50, NULL}},
         {cfg_obstFromStatus, {true, false, false, NULL}},
 #ifdef RATGDO32_DISCO
         {cfg_vehicleThreshold, {false, false, 100, helperVehicleThreshold}}, // call fn to set globals
         {cfg_vehicleHomeKit, {false, false, false, helperVehicleHomeKit}},   // call fn to enable/disable HomeKit accessories
+    {cfg_vehicleOccupancyHomeKit, {false, false, true, helperVehicleOccupancyHomeKit}}, // granular control for occupancy sensor
+    {cfg_vehicleArrivingHomeKit, {false, false, true, helperVehicleArrivingHomeKit}},   // granular control for arriving motion sensor
+    {cfg_vehicleDepartingHomeKit, {false, false, true, helperVehicleDepartingHomeKit}}, // granular control for departing motion sensor
         {cfg_laserEnabled, {false, false, false, helperLaser}},
         {cfg_laserHomeKit, {false, false, true, helperLaser}}, // call fn to enable/disable HomeKit accessories
         {cfg_assistDuration, {false, false, 60, NULL}},
@@ -389,6 +434,8 @@ userSettings::userSettings()
         {cfg_occupancyDuration, {false, false, 0, helperOccupancyDuration}}, // call fn to enable/disable HomeKit accessories
         {cfg_enableIPv6, {true, false, false, NULL}},
         {cfg_homespanCLI, {false, false, false, helperHomeSpanCLI}}, // call fn to enable/disable HomeSpan CLI and Improv
+        {cfg_lightHomeKit, {false, false, true, helperLightHomeKit}},   // call fn to enable/disable HomeKit light accessory (default: enabled)
+        {cfg_motionHomeKit, {false, false, true, helperMotionHomeKit}}, // call fn to enable/disable HomeKit motion accessory (default: enabled)
 #endif
 #ifdef USE_DHT22
         {cfg_dht22Pin, {true, false, -1, NULL}}, // DHT22 sensor GPIO pin, -1 = disabled
@@ -494,14 +541,14 @@ void userSettings::load()
         char *type = strchr(key, ',');
         if (!type)
         {
-            ESP_LOGI(TAG, "Malformed config line, skipping: %s", key);
+            ESP_LOGW(TAG, "Malformed config line, skipping: %s", key);
             continue;
         }
         *type++ = 0;
         char *value = strchr(type, ',');
         if (!value)
         {
-            ESP_LOGI(TAG, "Malformed config line, missing value: %s", key);
+            ESP_LOGW(TAG, "Malformed config line, missing value: %s", key);
             continue;
         }
         *value++ = 0;
@@ -706,7 +753,7 @@ uint32_t read_int_from_file(const char *filename, uint32_t defaultValue)
 void write_int_to_file(const char *filename, uint32_t value)
 {
     File file = LittleFS.open(filename, "w");
-    ESP_LOGI(TAG, "writing %lu to file %s", value, filename);
+    ESP_LOGD(TAG, "writing %lu to file %s", value, filename);
     file.print(value);
     file.close();
 }
@@ -726,7 +773,7 @@ bool read_blob_from_file(const char *filename, void *value, size_t size)
 void write_blob_to_file(const char *filename, const void *value, size_t size)
 {
     File file = LittleFS.open(filename, "w");
-    ESP_LOGI(TAG, "writing blob of size %d to file %s", size, filename);
+    ESP_LOGD(TAG, "writing blob of size %d to file %s", size, filename);
     file.write((uint8_t *)value, size);
     file.close();
 }

@@ -85,6 +85,8 @@ char *test_str = NULL;
 void handle_update();
 void handle_firmware_upload();
 void SSEHandler(uint32_t channel);
+void add_static_mdns();
+void add_dynamic_mdns();
 
 // Built in URI handlers
 const char restEvents[] = "/rest/events/";
@@ -211,6 +213,13 @@ static SemaphoreHandle_t jsonMutex = NULL;
 #define GIVE_MUTEX() xSemaphoreGive(jsonMutex)
 #endif
 
+// mDNS update management... re-announcing every 2 minutes.
+#define MDNS_ANNOUNCE_TIMEOUT (2 * 60 * 1000)
+// But not more often than every 10 seconds if pending updates.
+#define MDNS_UPDATE_INTERVAL (10 * 1000)
+static _millis_t lastMDNSupdate = 0;
+static bool mdnsUpdatePending = false;
+
 // Connection throttling
 #define MAX_CONCURRENT_REQUESTS 8
 #define REQUEST_TIMEOUT_MS 2000
@@ -307,6 +316,20 @@ void web_loop()
     static char *json = loop_json;
     _millis_t upTime = _millis();
     static _millis_t last_request_time = 0;
+
+    // manage frequency of mDNS updates
+    if (mdnsUpdatePending) {
+        if (upTime - lastMDNSupdate > MDNS_UPDATE_INTERVAL) {
+            // This function also resets mdnsUpdatePending and lastMDNSupdate.
+            add_dynamic_mdns();
+        }
+    }
+    else if (upTime - lastMDNSupdate > MDNS_ANNOUNCE_TIMEOUT)
+    {
+        // if it has been more than MDNS_ANNOUNCE_TIMEOUT since last update, re-announce
+        add_dynamic_mdns();
+    }
+
     TAKE_MUTEX();
     JSON_START(json);
 #ifdef USE_DHT22
@@ -385,11 +408,13 @@ void web_loop()
     {
         JSON_ADD_INT_C("batteryState", garage_door.batteryState, last_reported_garage_door.batteryState);
         JSON_ADD_INT_C("openingsCount", garage_door.openingsCount, last_reported_garage_door.openingsCount);
+        JSON_ADD_INT_C(cfg_builtInTTC, garage_door.builtInTTC, last_reported_garage_door.builtInTTC);
+        JSON_ADD_INT_C("builtInTTCremaining", garage_door.builtInTTCremaining, last_reported_garage_door.builtInTTCremaining);
+        JSON_ADD_BOOL_C("builtInTTChold", garage_door.builtInTTChold, last_reported_garage_door.builtInTTChold);
     }
     JSON_ADD_INT_C("openDuration", garage_door.openDuration, last_reported_garage_door.openDuration);
     JSON_ADD_INT_C("closeDuration", garage_door.closeDuration, last_reported_garage_door.closeDuration);
     JSON_ADD_INT_C("ttcActive", is_ttc_active(), last_reported_garage_door.ttcActive);
-    JSON_ADD_INT_C(cfg_builtInTTC, garage_door.builtInTTC, last_reported_garage_door.builtInTTC);
     // got any json?
     if (strlen(json) > 2)
     {
@@ -403,9 +428,17 @@ void web_loop()
         JSON_REMOVE_NL(json);
         if (!firmwareUpdateSub) // Only send if we are not in middle of firmware upgrade.
             SSEBroadcastState(json);
+
+        mdnsUpdatePending = true;
     }
     GIVE_MUTEX();
-
+    static time_t mdnsDoorUpdateAt = 0;
+    if (lastDoorUpdateAt && !mdnsDoorUpdateAt)
+    {
+        // First time setting it... subsequent changes handled above.
+        mdnsDoorUpdateAt = lastDoorUpdateAt;
+        mdnsUpdatePending = true;
+    }
     // Rate limiting - minimum interval between requests
     _millis_t current_time = _millis();
     if (current_time - last_request_time < MIN_REQUEST_INTERVAL_MS)
@@ -498,6 +531,17 @@ void setup_web()
     else
     {
         ESP_LOGE(TAG, "Failed to add MDNS service for _http._tcp on port 80");
+    }
+
+    if (MDNS.addService("ratgdo", "tcp", 80))
+    {
+        ESP_LOGI(TAG, "Added MDNS service for _ratgdo._tcp on port 80");
+        add_static_mdns();
+        add_dynamic_mdns();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Failed to add MDNS service for _ratgdo._tcp on port 80");
     }
 
     web_setup_done = true;
@@ -760,7 +804,6 @@ void build_status_json(char *json)
     JSON_ADD_INT(cfg_logLevel, userConfig->getLogLevel());
     JSON_ADD_INT(cfg_TTCseconds, userConfig->getTTCseconds());
     JSON_ADD_BOOL(cfg_TTClight, userConfig->getTTClight());
-    JSON_ADD_INT(cfg_builtInTTC, userConfig->getBuiltInTTC());
     JSON_ADD_INT(cfg_motionTriggers, (uint32_t)motionTriggers.asInt);
     JSON_ADD_INT(cfg_LEDidle, userConfig->getLEDidle());
     // We send milliseconds relative to current time... ie updated X milliseconds ago
@@ -776,6 +819,7 @@ void build_status_json(char *json)
     const char *tz = userConfig->getTimeZone();
     JSON_ADD_STR(cfg_timeZone, (tz && strlen(tz) > 0) ? tz : "Etc/UTC;UTC0");
     JSON_ADD_BOOL(cfg_dcOpenClose, userConfig->getDCOpenClose());
+    JSON_ADD_BOOL(cfg_dcBypassTTC, userConfig->getDCBypassTTC());
     JSON_ADD_BOOL(cfg_obstFromStatus, userConfig->getObstFromStatus());
     JSON_ADD_INT(cfg_dcDebounceDuration, userConfig->getDCDebounceDuration());
     JSON_ADD_STR("qrPayload", qrPayload);
@@ -783,6 +827,10 @@ void build_status_json(char *json)
     {
         JSON_ADD_INT("batteryState", garage_door.batteryState);
         JSON_ADD_INT("openingsCount", garage_door.openingsCount);
+        JSON_ADD_INT(cfg_builtInTTC, userConfig->getBuiltInTTC());
+        JSON_ADD_INT("builtInTTCremaining", garage_door.builtInTTCremaining);
+        JSON_ADD_BOOL("builtInTTChold", garage_door.builtInTTChold);
+        JSON_ADD_BOOL(cfg_useToggle, userConfig->getUseToggle());
     }
     if (garage_door.openDuration)
     {
@@ -825,12 +873,17 @@ void build_status_json(char *json)
         JSON_ADD_BOOL("assistLaser", last_reported_assist_laser);
     }
     JSON_ADD_BOOL(cfg_vehicleHomeKit, userConfig->getVehicleHomeKit());
+    JSON_ADD_BOOL(cfg_vehicleOccupancyHomeKit, userConfig->getVehicleOccupancyHomeKit());
+    JSON_ADD_BOOL(cfg_vehicleArrivingHomeKit, userConfig->getVehicleArrivingHomeKit());
+    JSON_ADD_BOOL(cfg_vehicleDepartingHomeKit, userConfig->getVehicleDepartingHomeKit());
     JSON_ADD_INT(cfg_vehicleThreshold, userConfig->getVehicleThreshold());
     JSON_ADD_BOOL(cfg_laserEnabled, userConfig->getLaserEnabled());
     JSON_ADD_BOOL(cfg_laserHomeKit, userConfig->getLaserHomeKit());
     JSON_ADD_INT(cfg_assistDuration, userConfig->getAssistDuration());
 #endif
     JSON_ADD_BOOL(cfg_homespanCLI, userConfig->getEnableHomeSpanCLI());
+    JSON_ADD_BOOL(cfg_lightHomeKit, userConfig->getLightHomeKit());
+    JSON_ADD_BOOL(cfg_motionHomeKit, userConfig->getMotionHomeKit());
 #endif
 #ifdef USE_DHT22
     JSON_ADD_INT(cfg_dht22Pin, (int32_t)userConfig->getDHT22Pin());
@@ -840,6 +893,72 @@ void build_status_json(char *json)
     JSON_ADD_INT("webMaxResponseTime", max_response_time);
     JSON_ADD_INT("ttcActive", is_ttc_active());
     JSON_END();
+}
+
+void add_static_mdns()
+{
+    // Values that do not change during runtime
+    ESP_LOGD(TAG, "Adding static mDNS TXT records");
+    MDNS.addServiceTxt("ratgdo", "tcp", "model", MODEL_NAME);
+    MDNS.addServiceTxt("ratgdo", "tcp", "firmwareVersion", AUTO_VERSION);
+    MDNS.addServiceTxt("ratgdo", "tcp", "firmwareDate", __DATE__ " " __TIME__);
+    MDNS.addServiceTxt("ratgdo", "tcp", cfg_deviceName, userConfig->getDeviceName());
+    MDNS.addServiceTxt("ratgdo", "tcp", "gitRepo", gitRepo);
+    MDNS.addServiceTxt("ratgdo", "tcp", "macAddress", WiFi.macAddress().c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", "wifiSSID", WiFi.SSID().c_str());
+#ifdef RATGDO32_DISCO
+    MDNS.addServiceTxt("ratgdo", "tcp", "distanceSensor", garage_door.has_distance_sensor ? "true" : "false");
+#endif
+}
+
+void add_dynamic_mdns()
+{
+    // Values that may change during runtime
+    ESP_LOGD(TAG, "Updating dynamic mDNS TXT records");
+    _millis_t upTime = _millis();
+    MDNS.addServiceTxt("ratgdo", "tcp", "upTime", std::to_string(upTime).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", "wifiRSSI", std::to_string(WiFi.RSSI()).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", "wifiChannel", std::to_string(WiFi.channel()).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", "wifiBSSID", WiFi.BSSIDstr().c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", "paired", homekit_is_paired() ? "true" : "false");
+    MDNS.addServiceTxt("ratgdo", "tcp", "garageDoorState", DOOR_STATE(garage_door.current_state));
+    MDNS.addServiceTxt("ratgdo", "tcp", "garageLockState", REMOTES_STATE(garage_door.current_lock));
+    MDNS.addServiceTxt("ratgdo", "tcp", "garageLightOn", garage_door.light ? "true" : "false");
+    MDNS.addServiceTxt("ratgdo", "tcp", "garageMotion", garage_door.motion ? "true" : "false");
+    MDNS.addServiceTxt("ratgdo", "tcp", "garageObstructed", garage_door.obstructed ? "true" : "false");
+    if (doorControlType == 2)
+    {
+        MDNS.addServiceTxt("ratgdo", "tcp", "batteryState", std::to_string(garage_door.batteryState).c_str());
+        MDNS.addServiceTxt("ratgdo", "tcp", "openingsCount", std::to_string(garage_door.openingsCount).c_str());
+        MDNS.addServiceTxt("ratgdo", "tcp", cfg_builtInTTC, std::to_string(userConfig->getBuiltInTTC()).c_str());
+    }
+    MDNS.addServiceTxt("ratgdo", "tcp", cfg_TTCseconds, std::to_string(userConfig->getTTCseconds()).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", "openDuration", std::to_string(garage_door.openDuration).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", "closeDuration", std::to_string(garage_door.closeDuration).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", cfg_passwordRequired, userConfig->getPasswordRequired() ? "true" : "false");
+    // We send milliseconds relative to current time... ie updated X milliseconds ago
+    MDNS.addServiceTxt("ratgdo", "tcp", cfg_doorUpdateAt, std::to_string(upTime - lastDoorUpdateAt).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", cfg_doorOpenAt, std::to_string(upTime - lastDoorOpenAt).c_str());
+    MDNS.addServiceTxt("ratgdo", "tcp", cfg_doorCloseAt, std::to_string(upTime - lastDoorCloseAt).c_str());
+#ifdef RATGDO32_DISCO
+    if (garage_door.has_distance_sensor)
+    {
+        MDNS.addServiceTxt("ratgdo", "tcp", "vehicleStatus", (const char *)vehicleStatus);
+        MDNS.addServiceTxt("ratgdo", "tcp", "vehicleDist", std::to_string((uint32_t)vehicleDistance).c_str());    }
+#endif
+    if (enableNTP && (bool)clockSet)
+    {
+        MDNS.addServiceTxt("ratgdo", "tcp", "serverTime", std::to_string(time(NULL)).c_str());
+        MDNS.addServiceTxt("ratgdo", "tcp", "serverTimeStr", (const char *)timeString());
+        MDNS.addServiceTxt("ratgdo", "tcp", cfg_timeZone, userConfig->getTimeZone());
+    }
+#ifdef ESP8266
+    MDNS.announce();
+#else
+    MDNS.setInstanceName(device_name);
+#endif
+    mdnsUpdatePending = false;
+    lastMDNSupdate = _millis();
 }
 
 void handle_status()
@@ -1469,8 +1588,9 @@ void SSEBroadcastState(const char *data, BroadcastType type)
                 }
                 else if (type == RATGDO_STATUS)
                 {
-                    String IPaddrstr = IPAddress(subscription[i].clientIP).toString();
-                    ESP_LOGV(TAG, "Client %s (%s) send status SSE on channel %d, data: %s", IPaddrstr.c_str(), subscription[i].clientUUID.c_str(), i, data);
+                    ESP_LOGV(TAG, "Client %s (%s) send status SSE on channel %d, data: %s",
+                             IPAddress(subscription[i].clientIP).toString().c_str(),
+                             subscription[i].clientUUID.c_str(), i, data);
                     if (snprintf_P(writeBuffer, sizeof(writeBuffer), PSTR("event: message\ndata: %s\n\n"), data) >= (int)sizeof(writeBuffer))
                     {
                         // Will not fit in our write buffer, let system printf handle
@@ -1588,7 +1708,14 @@ void handle_firmware_upload()
         // struct eboot_command ebootCmd;
         // eboot_command_read(&ebootCmd);
         // ESP_LOGI(TAG, "eboot_command: 0x%08X 0x%08X [0x%08X 0x%08X 0x%08X (%d)]", ebootCmd.magic, ebootCmd.action, ebootCmd.args[0], ebootCmd.args[1], ebootCmd.args[2], ebootCmd.args[2]);
-        if (!verify)
+        if (firmwareSize > maxSketchSpace)
+        {
+            ESP_LOGE(TAG, "Firmware size is larger than available OTA upload space");
+            // If we detect this error then we will not shut down all our services, because upload will fail.
+            // Failure is detected on first call to Update.write() where it will set UPDATE_ERROR_SPACE.
+            // This is passed back to the client with a http 400 error and the string "Not Enough Space"
+        }
+        else if (!verify)
         {
             // Close services so we don't have to handle network traffic during update
             // Only if not verifying as either will have been shutdown on immediately prior upload, or we
@@ -1611,6 +1738,7 @@ void handle_firmware_upload()
             vTaskDelete(homeSpan.getAutoPollTask());
 #endif
         }
+
         if (!verify && !Update.begin((firmwareSize > 0) ? firmwareSize : maxSketchSpace, U_FLASH))
         {
             _setUpdaterError();

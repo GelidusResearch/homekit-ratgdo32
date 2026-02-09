@@ -6,9 +6,7 @@
 > [!NOTE]
 > Version 3.3.0 is a minor upgrade for ESP32-based ratgdo boards. Almost all source files for the ESP8266 and ESP32 versions of ratgdo have been merged which results in minor changes to the underlying features and function for ESP32 versions. The main benefit is for the original ESP8266-based ratgdo boards.
 >
->While source files have been merged there remain significant differences between the two board types, most notably in the library used to communicate with HomeKit which are completely different.
->
->* Before an Over-The-Air (OTA) upgrade it is good to first reboot your current version.
+> While source files have been merged there remain significant differences between the two board types, most notably in the library used to communicate with HomeKit which are completely different.
 
 # What is HomeKit-RATGDO?
 
@@ -27,6 +25,7 @@ This firmware supports Security+, Security+ 2.0 and Dry Contact enabled garage d
 - Motion sensor reporting, if you have a "smart" wall-mounted control panel or with the obstruction sensor
 - Vehicle presence, arrival and departure sensing (ratgdo32-disco board only)
 - Parking assist laser (ratgdo32-disco board only)
+- DHT22 Temperature and Humidity sensor (GRGDO1 specific)
 
 Check the [GitHub Issues](https://github.com/gelidusresearch/homekit-ratgdo32/issues) for planned features, or to suggest your own.
 
@@ -34,6 +33,7 @@ For full history please see [CHANGELOG.md](https://github.com/ratgdo/homekit-rat
 
 ### Known Issues
 
+- ESP32 (ratgdo32) only... Some users may get an error during OTA upload that firmware is too large for the OTA partition. See [Upgrade failures](#upgrade-failures) below for work-around.
 - Security+ 1.0 doors with digital wall panel (e.g. LiftMaster 889LM) sometimes do not close after a time-to-close delay. Please watch your door to make sure it closes after TTC delay.
 - Security+ 1.0 doors with "0x37" digital wall panel (e.g. LiftMaster 398LM) not working. We detect but do not support them. Recommend replacing with 889LM panel.
 - When creating automations in Apple Home the garage door may show only lock/unlock and not open/close as triggers. This is a bug in Apple Home. Workaround is to use the Eve App to create the automation, it will show both options.
@@ -70,6 +70,7 @@ When you first add the device to HomeKit a number of accessories are added:
 * Vehicle departing _motion_ sensor. Only on ratgdo32-disco boards, triggers motion if it detects departure of a vehicle.
 * Vehicle presence _occupancy_ sensor. Only on ratgdo32-disco boards, set if the distance sensor detects presence of a vehicle.
 * Parking assist laser _light switch_. Only on ratgdo32-disco boards.
+* DHT22 Temperature and Humidity sensor (GRGDO1 specific).
 
 Vehicle arrival and departing sensors are only triggered if vehicle motion is detected within 5 minutes of door opening or closing. The parking assist laser is activated when vehicle arrival is detected.
 
@@ -118,6 +119,13 @@ For ratgdo32-disco boards, vehicle status is shown as _Away_, _Parked_, _Arrivin
 
 > [!NOTE]
 > It is important that the distance sensor does not point at the glass windshield of your vehicle as this will give unreliable results.
+
+### Automatic Close Warning
+
+If you have a Security+ 2.0 door with an automatic time-to-close set, then a warning is displayed here showing the time in minutes after which the door will automatically close.  If the door is already open, then this section will display a countdown with the approximate time remaining before the door will close. See [Automatic Close](#automatic-close) section below.
+
+> [!NOTE]
+> This built-in automatic close feature is different from the [Door Close Delay](#door-close-delay) in that, if set, it is _always_ active and will close the door after the set delay without any user action.  A door close delay, however, is triggered only on a user requesting the door to close from the web page or an app, and is typically of much shorter duration.
 
 ### Information section
 
@@ -195,11 +203,17 @@ Setting the slider to zero, and saving the settings, will cancel the garage door
 > [!WARNING]
 > Automatic close will not work if on battery power or if the obstruction sensors are misaligned. This feature is NOT intended to be the primary method of closing the door. **A keyless entry should be installed in the event of an accidental lock out while using this feature.**
 
+### Light
+
+On ratgdo32 devices you can select whether to create a HomeKit light switch accessory to control the garage door opener lights.  This is enabled by default.
+
 ### Motion Triggers
 
 This allows you to select what causes the HomeKit motion sensor accessory to trigger. The default is to use the motion sensor built into the garage door opener, if it exists. The presence of a motion sensor is detected automatically... based on detecting motion in the garage. If your door opener does not have a motion sensor then the checkbox will show as un-checked and un-selectable.
 
 Motion can also be triggered by the obstruction sensor or by a user pressing the door, light or lock buttons on the wall panel. This is disabled by default but may be selected on the web page.
+
+On ratgdo32 devices you can select whether to create a HomeKit motion sensor accessory.  This is enabled by default.
 
 ### Occupancy Duration _(not supported on ratgdo v2.5 boards)_
 
@@ -235,7 +249,9 @@ For Dry Contact door protocol, set the sensor debounce duration. When the door o
 
 ### Enable hardwired open/close control
 
-For Security+ 1.0 and Security +2.0 it is possible to repurpose the sensors used for dry-contact door open / close to buttons that trigger a door open / close action. Select this check box to enable this option.
+For Security+ 1.0 and Security +2.0 it is possible to repurpose the sensors used for dry-contact door open / close to buttons that trigger a door open / close action. Select this check box to enable this option. When both the open and close GPIOs are tied together with a jumper (or wired to the same button), the inputs behave exactly like the factory wall control: a toggle from a fully open/closed door starts travel in the opposite direction, a toggle while moving pauses the door, and a follow-up toggle from that paused state makes the door reverse direction.
+
+When enabled, an additional option appears to **Bypass time-to-close delay for hardwired controls**. Use this when the open/close GPIOs are wired to a physical wall button and you want that button to behave like the native door control panel. When checked, any close or toggle action that comes from the hardwired inputs will ignore the configured Time-To-Close warning delay so the door responds immediately, while HomeKit, automations, or remotes continue to respect the delay.
 
 ### Use software serial emulation rather than h/w UART _(ratgdo32 boards only)_
 
@@ -330,6 +346,7 @@ This button erases all saved settings, including WiFi, HomeKit unique IDs. The d
 
 Over-the-Air (OTA) updates are supported, either directly from GitHub or by selecting a firmware binary file on your computer. Follow the steps below to update:
 
+- Before an Over-The-Air (OTA) upgrade it is good to first reboot your current version.
 - Navigate to your ratgdo's ip address where you will see the devices webpage, Click `Firmware Update`
 
 [![ota](docs/ota/ota.png)](#ota)
@@ -343,12 +360,15 @@ Over-the-Air (OTA) updates are supported, either directly from GitHub or by sele
     [![firmware](docs/ota/firmware.png)](#firmware)
   - Upload the firmware that was downloaded in step 1, by clicking `Choose File` under `Update from local file`.
   - Click `Update` to proceed with upgrading.
-  - Once the update is Successful, ratgdo will now Reboot.
-  - After a firmware update, you _may_ have to go through the process of re-pairing your device to HomeKit. If your device is showing up as unresponsive in HomeKit, please try un-pairing, reboot, and re-pairing.
+- Once the update is Successful, ratgdo will now Reboot.
+- The first time you open the ratgdo webpage after a upgrade it is a good idea to reload the browser page while holding down the shift key. This forces the browser to reload pages from the server rather than using a local cached copy.
+- After a firmware update, you _may_ have to go through the process of re-pairing your device to HomeKit. If your device is showing up as unresponsive in HomeKit, please try un-pairing, reboot, and re-pairing.
 
 Automatic updates are not supported (and probably will never be), so set a reminder to check back again in the future.
 
 ## Upgrade failures
+
+If you get an error message stating that the firmware size is too large for the OTA partition then you must install the firmware using USB Serial method described in [How do I install it](#how-do-i-install-it) above. This error may be a symptom of having installed non-HomeKit firmware onto the ratgdo device.
 
 If the OTA firmware update fails the following message will be displayed and you are given the option to reboot or cancel. If you reboot, the device will reload the same firmware as previously installed. If you cancel then the device remains open, but the HomeKit service will be shutdown. This may be helpful for debugging, see [Troubleshooting](#troubleshooting) section below.
 
