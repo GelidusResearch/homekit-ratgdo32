@@ -79,6 +79,7 @@ jobs:
         uses: actions/checkout@v4
         with:
             fetch-depth: 0
+            ref: merge-upstream-v3.4.3 # Ensure we are on a branch, not detached HEAD
 
       - name: Set Tag
         id: tag
@@ -134,6 +135,8 @@ jobs:
           commit_message: "Update docs/firmware and manifests for release ${{ steps.tag.outputs.latestTag }}"
           file_pattern: 'docs/'
           push_options: '--force'
+          branch: merge-upstream-v3.4.3
+          branch: merge-upstream-v3.4.3
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
