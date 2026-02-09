@@ -53,6 +53,10 @@ extern char default_device_name[DEVICE_NAME_SIZE];
 // On ESP32 these are saved to NVRAM, on ESP8266 we will save to a file.
 // NOTE... truncated to 15 chars when saving to NVRAM !!!
 constexpr char cfg_deviceName[] PROGMEM = "deviceName";
+#ifdef USE_DHT22
+constexpr char cfg_dht22Pin[] PROGMEM = "dht22Pin";
+constexpr char cfg_dht22TempFormat[] PROGMEM = "dht22TempFormat"; // "C" or "F"
+#endif
 constexpr char cfg_wifiChanged[] PROGMEM = "wifiChanged";
 constexpr char cfg_wifiPower[] PROGMEM = "wifiPower";
 constexpr char cfg_wifiPhyMode[] PROGMEM = "wifiPhyMode";
@@ -202,6 +206,10 @@ public:
     uint32_t getOccupancyDuration() { return std::get<int>(get(cfg_occupancyDuration)); };
     bool getEnableIPv6() { return std::get<bool>(get(cfg_enableIPv6)); };
     bool getEnableHomeSpanCLI() { return std::get<bool>(get(cfg_homespanCLI)); };
+#endif
+#ifdef USE_DHT22
+    int getDHT22Pin() { return contains(cfg_dht22Pin) ? std::get<int>(get(cfg_dht22Pin)) : -1; };
+    char *getDHT22TempFormat() { return contains(cfg_dht22TempFormat) ? std::get<configStr>(get(cfg_dht22TempFormat)).str : (char*)"C"; };
 #endif
 };
 extern userSettings *userConfig;

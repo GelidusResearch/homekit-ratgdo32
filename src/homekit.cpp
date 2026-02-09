@@ -329,6 +329,9 @@ static DEV_Motion *departing;
 static DEV_Occupancy *vehicle;
 static DEV_Light *assistLaser;
 static DEV_Occupancy *roomOccupancy;
+#ifdef USE_DHT22
+DEV_TempHumidity *tempHumidity;
+#endif
 
 // Buffer to hold all IPv6 addresses as a single string
 char ipv6_addresses[LWIP_IPV6_NUM_ADDRESSES * IP6ADDR_STRLEN_MAX] = {0};
@@ -799,6 +802,18 @@ void setup_homekit()
     // Create a room occupancy sensor if timer for it is greater than 0
     enable_service_homekit_room_occupancy(userConfig->getOccupancyDuration() > 0);
 
+#ifdef USE_DHT22
+    int dht22Pin = userConfig->contains(cfg_dht22Pin) ? std::get<int>(userConfig->get(cfg_dht22Pin)) : -1;
+    if (dht22Pin >= 0) {
+        ESP_LOGI(TAG, "Creating Temperature and Humidity Sensor accessory (DHT22 on pin %d)", dht22Pin);
+        new SpanAccessory(HOMEKIT_AID_TEMP_HUMIDITY);
+        new DEV_Info("Temperature Sensor");
+        tempHumidity = new DEV_TempHumidity();
+    } else {
+        ESP_LOGI(TAG, "DHT22 disabled. Skipping temperature/humidity service");
+    }
+#endif
+
     // Auto poll starts up a new FreeRTOS task to do the HomeKit comms
     // so no need to handle in our Arduino loop.
     homeSpan.autoPoll((1024 * 16), 1, 0);
@@ -1004,6 +1019,40 @@ void DEV_Occupancy::loop()
     }
 }
 
+#ifdef USE_DHT22
+/****************************************************************************
+ * Temperature and Humidity Sensor Service Handler
+ */
+DEV_TempHumidity::DEV_TempHumidity() : Service::TemperatureSensor()
+{
+    ESP_LOGI(TAG, "Configuring HomeKit Temperature and Humidity Service");
+    event_q = xQueueCreate(10, sizeof(GDOEvent));
+    temperature = new Characteristic::CurrentTemperature(0.0);
+
+    // Create a separate Humidity Sensor service for the same accessory
+    new Service::HumiditySensor();
+    humidity = new Characteristic::CurrentRelativeHumidity(0.0);
+}
+
+void DEV_TempHumidity::setValues(float temp, float hum)
+{
+    ESP_LOGI(TAG, "HomeKit temperature: %.1f°C, humidity: %.1f%%", temp, hum);
+    temperature->setVal(temp);
+    humidity->setVal(hum);
+}
+
+void DEV_TempHumidity::loop()
+{
+    if (uxQueueMessagesWaiting(event_q) > 0)
+    {
+        GDOEvent e;
+        xQueueReceive(event_q, &e, 0);
+        // Event queue not currently used for temp/humidity
+        // Updates happen directly via setValues()
+    }
+}
+#endif // USE_DHT22
+
 /****************************************************************************
  * HomeKit notification functions only for ESP32
  */
@@ -1062,6 +1111,16 @@ void notify_homekit_vehicle_departing(bool vehicleDeparting)
     e.value.b = vehicleDeparting;
     queueSendHelper(departing->event_q, e, "departing");
 }
+
+#ifdef USE_DHT22
+void notify_homekit_temperature_humidity(float temp, float hum)
+{
+    if (!isPaired || !tempHumidity)
+        return;
+
+    tempHumidity->setValues(temp, hum);
+}
+#endif // USE_DHT22
 
 // on ESP8266 this is provided by the Arduino HomeKit library
 bool homekit_is_paired()

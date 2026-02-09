@@ -331,6 +331,10 @@ userSettings::userSettings()
     strlcpy(usernameBuf, "admin", 32);
     char *credentialsBuf = static_cast<char *>(malloc(36));
     strlcpy(credentialsBuf, "10d3c00fa1e09696601ef113b99f8a87", 36);
+#ifdef USE_DHT22
+    char *dht22TempFormatBuf = static_cast<char *>(malloc(2));
+    strlcpy(dht22TempFormatBuf, "C", 2);
+#endif
     //  key, {reboot, wifiChanged, value, fn to call}
     settings = {
         {cfg_deviceName, {false, false, (configStr){DEVICE_NAME_SIZE, default_device_name}, setDeviceName}}, // call fn to set global
@@ -385,6 +389,10 @@ userSettings::userSettings()
         {cfg_occupancyDuration, {false, false, 0, helperOccupancyDuration}}, // call fn to enable/disable HomeKit accessories
         {cfg_enableIPv6, {true, false, false, NULL}},
         {cfg_homespanCLI, {false, false, false, helperHomeSpanCLI}}, // call fn to enable/disable HomeSpan CLI and Improv
+#endif
+#ifdef USE_DHT22
+        {cfg_dht22Pin, {true, false, -1, NULL}}, // DHT22 sensor GPIO pin, -1 = disabled
+        {cfg_dht22TempFormat, {false, false, (configStr){2, dht22TempFormatBuf}, NULL}}, // "C" or "F"
 #endif
     };
     IRAM_END(TAG);

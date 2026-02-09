@@ -47,6 +47,9 @@ void homekit_loop();
 #define HOMEKIT_AID_VEHICLE 7
 #define HOMEKIT_AID_LASER 8
 #define HOMEKIT_AID_ROOM_OCCUPANCY 9
+#ifdef USE_DHT22
+#define HOMEKIT_AID_TEMP_HUMIDITY 10
+#endif
 
 enum Light_t : uint8_t
 {
@@ -62,6 +65,9 @@ extern void enable_service_homekit_vehicle(bool enable);
 extern bool enable_service_homekit_laser(bool enable);
 extern bool enable_service_homekit_room_occupancy(bool enable);
 extern void notify_homekit_room_occupancy(bool occupied);
+#ifdef USE_DHT22
+extern void notify_homekit_temperature_humidity(float temp, float hum);
+#endif
 
 extern void homekit_unpair();
 extern bool homekit_is_paired();
@@ -125,10 +131,20 @@ struct DEV_Motion : Service::MotionSensor
 struct DEV_Occupancy : Service::OccupancySensor
 {
     Characteristic::OccupancyDetected *occupied;
-
     QueueHandle_t event_q;
-
     DEV_Occupancy();
     void loop();
 };
+
+#ifdef USE_DHT22
+struct DEV_TempHumidity : Service::TemperatureSensor
+{
+    Characteristic::CurrentTemperature *temperature;
+    Characteristic::CurrentRelativeHumidity *humidity;
+    QueueHandle_t event_q;
+    DEV_TempHumidity();
+    void loop();
+    void setValues(float temp, float hum);
+};
+#endif // USE_DHT22
 #endif // ESP8266

@@ -597,6 +597,33 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = value + "&nbsp;Seconds";
                 break;
 
+            case "dht22Temp":
+                document.getElementById("dht22Row").style.display = "table-row";
+                // Use stored format from serverStatus (set when dht22TempFormat is processed)
+                var tempFormat = serverStatus.dht22TempFormat || "C";
+                document.getElementById(key).innerHTML = value.toFixed(1) + "&deg;" + tempFormat;
+                break;
+            case "dht22Hum":
+                document.getElementById("dht22Row").style.display = "table-row";
+                document.getElementById(key).innerHTML = value.toFixed(1) + "%";
+                break;
+            case "dht22Pin":
+                document.getElementById(key).value = value;
+                document.getElementById("dht22TempFormatRow").style.display = (value >= 0) ? "table-row" : "none";
+                break;
+            case "dht22TempFormat":
+                serverStatus.dht22TempFormat = value; // Store in serverStatus
+                if (value === "F") {
+                    document.getElementById("tempFormatF").checked = true;
+                } else {
+                    document.getElementById("tempFormatC").checked = true;
+                }
+                // Update temperature display with correct format if temp value exists
+                if (serverStatus.dht22Temp !== undefined) {
+                    document.getElementById("dht22Temp").innerHTML = serverStatus.dht22Temp.toFixed(1) + "&deg;" + value;
+                }
+                break;
+
             case "freeIramHeap":
             case "webRequests":
             case "webMaxResponseTime":
@@ -1244,6 +1271,10 @@ async function saveSettings() {
     const timeZone = list.options[list.selectedIndex].text + ';' + list.options[list.selectedIndex].value;
     const homespanCLI = (document.getElementById("homespanCLI").checked) ? '1' : '0';
 
+    let dht22Pin = parseInt(document.getElementById("dht22Pin").value);
+    if (isNaN(dht22Pin)) dht22Pin = -1;
+    const dht22TempFormat = (document.getElementById("tempFormatF").checked) ? 'F' : 'C';
+
     // check IP addresses valid
     const regexIPv4 = /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/i;
 
@@ -1288,6 +1319,8 @@ async function saveSettings() {
         "obstFromStatus", obstFromStatus,
         "dcDebounceDuration", dcDebounceDuration,
         "homespanCLI", homespanCLI,
+        "dht22Pin", dht22Pin,
+        "dht22TempFormat", dht22TempFormat,
     );
     if (reboot) {
         countdown(rebootSeconds, "Settings saved, RATGDO device rebooting...&nbsp;");

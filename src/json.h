@@ -112,11 +112,26 @@ inline char *add_bool(char *s, const char *k, bool v)
     return s;
 }
 
+inline char *add_float(char *s, const char *k, float v)
+{
+    *s++ = '"';
+    s = stpcpy(s, k);
+    *s++ = '"';
+    *s++ = ':';
+    *s++ = ' ';
+    s = stpcpy(s, std::to_string(v).c_str());
+    *s++ = ',';
+    *s++ = '\n';
+    *s = 0; // null terminate
+    return s;
+}
+
 #define JSON_START(buf) char *_json_p = start_json(buf)
 #define JSON_END() end_json(_json_p)
 #define JSON_ADD_INT(k, v) _json_p = add_int(_json_p, k, v)
 #define JSON_ADD_STR(k, v) _json_p = add_str(_json_p, k, v)
 #define JSON_ADD_BOOL(k, v) _json_p = add_bool(_json_p, k, v)
+#define JSON_ADD_FLOAT(k, v) _json_p = add_float(_json_p, k, v)
 #define JSON_ADD_RAW(k, v) _json_p = add_str(_json_p, k, v, true) // value added without surrounding quotes
 
 #define JSON_ADD_INT_C(k, v, ov) \

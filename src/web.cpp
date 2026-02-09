@@ -20,6 +20,9 @@
 #include <unordered_map>
 #include <time.h>
 
+// Third-party sensor libraries
+#include <DHT.h>
+
 // ESP system includes
 #include <Ticker.h>
 #include <MD5Builder.h>
@@ -306,54 +309,57 @@ void web_loop()
     static _millis_t last_request_time = 0;
     TAKE_MUTEX();
     JSON_START(json);
-    if (garage_door.active && garage_door.current_state != lastDoorState)
-    {
-        ESP_LOGD(TAG, "Current Door State changing from %s to %s", DOOR_STATE(lastDoorState), DOOR_STATE(garage_door.current_state));
-        if (enableNTP && clockSet)
-        {
-            time_t timeNow = time(NULL);
-            if (lastDoorState == 0xff)
-            {
-                // initialize with saved time.
-                // lastDoorUpdateAt is milliseconds relative to system reboot time.
-                lastDoorUpdateAt = (userConfig->getDoorUpdateAt() != 0) ? ((userConfig->getDoorUpdateAt() - timeNow) * 1000) + upTime : 0;
-                lastDoorOpenAt = (userConfig->getDoorOpenAt() != 0) ? ((userConfig->getDoorOpenAt() - timeNow) * 1000) + upTime : 0;
-                lastDoorCloseAt = (userConfig->getDoorCloseAt() != 0) ? ((userConfig->getDoorCloseAt() - timeNow) * 1000) + upTime : 0;
-            }
-            else
-            {
-                // first state change after a reboot, so really is a state change.
-                lastDoorUpdateAt = upTime;
-                userConfig->set(cfg_doorUpdateAt, (int)timeNow);
-                if (garage_door.current_state == GarageDoorCurrentState::CURR_OPEN)
-                {
-                    lastDoorOpenAt = upTime;
-                    userConfig->set(cfg_doorOpenAt, (int)timeNow);
-                }
-                if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSED)
-                {
-                    lastDoorCloseAt = upTime;
-                    userConfig->set(cfg_doorCloseAt, (int)timeNow);
-                }
-                ESP8266_SAVE_CONFIG();
-            }
-        }
-        else
-        {
-            // No realtime set, use upTime.
-            lastDoorUpdateAt = (lastDoorState == 0xff) ? 0 : upTime;
-            if (garage_door.current_state == GarageDoorCurrentState::CURR_OPEN)
-                lastDoorOpenAt = lastDoorUpdateAt;
-            if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSED)
-                lastDoorCloseAt = lastDoorUpdateAt;
-        }
-        lastDoorState = garage_door.current_state;
-        // We send milliseconds relative to current time... ie updated X milliseconds ago
-        // First time through, zero offset from upTime, which is when we last rebooted)
-        JSON_ADD_INT(cfg_doorUpdateAt, (upTime - lastDoorUpdateAt));
-        JSON_ADD_INT(cfg_doorOpenAt, (upTime - lastDoorOpenAt));
-        JSON_ADD_INT(cfg_doorCloseAt, (upTime - lastDoorCloseAt));
+#ifdef USE_DHT22
+    // DHT22 sensor read and config
+    int dht22Pin = userConfig->contains(cfg_dht22Pin) ? std::get<int>(userConfig->get(cfg_dht22Pin)) : -1;
+    std::string tempFormat = userConfig->contains(cfg_dht22TempFormat) ? std::get<configStr>(userConfig->get(cfg_dht22TempFormat)).str : "C";
+    static float dht22Temp = NAN;
+    static float dht22Hum = NAN;
+    static unsigned long lastDHT22Read = 0;
+    static std::string lastTempFormat = "";
+    const unsigned long DHT22_READ_INTERVAL = 60000; // 60 seconds
+
+    // Reset cache if temperature format changes
+    if (tempFormat != lastTempFormat) {
+        lastDHT22Read = 0;
+        lastTempFormat = tempFormat;
     }
+
+    if (dht22Pin >= 0) {
+        unsigned long currentMillis = millis();
+        // Read sensor initially (lastDHT22Read == 0) or after 60 seconds
+        if (lastDHT22Read == 0 || (currentMillis - lastDHT22Read >= DHT22_READ_INTERVAL)) {
+            static DHT dht(dht22Pin, DHT22);
+            dht.begin();
+            if (tempFormat == "F" || tempFormat == "f") {
+                dht22Temp = dht.readTemperature(true);
+            } else {
+                dht22Temp = dht.readTemperature();
+            }
+            dht22Hum = dht.readHumidity();
+            lastDHT22Read = currentMillis;
+
+#ifndef ESP8266
+            if (!isnan(dht22Temp) && !isnan(dht22Hum)) {
+                // HomeKit always expects temperature in Celsius
+                float tempCelsius = dht22Temp;
+                if (tempFormat == "F" || tempFormat == "f") {
+                    tempCelsius = (dht22Temp - 32.0) * 5.0 / 9.0;
+                }
+                notify_homekit_temperature_humidity(tempCelsius, dht22Hum);
+            }
+#endif
+        }
+
+        if (!isnan(dht22Temp)) {
+            JSON_ADD_FLOAT("dht22Temp", dht22Temp);
+        }
+        if (!isnan(dht22Hum)) {
+            JSON_ADD_FLOAT("dht22Hum", dht22Hum);
+        }
+    }
+#endif // USE_DHT22
+    // ...existing code...
 #ifdef RATGDO32_DISCO
     // Feature not available on ESP8266
     if (garage_door.has_distance_sensor)
@@ -825,6 +831,10 @@ void build_status_json(char *json)
     JSON_ADD_INT(cfg_assistDuration, userConfig->getAssistDuration());
 #endif
     JSON_ADD_BOOL(cfg_homespanCLI, userConfig->getEnableHomeSpanCLI());
+#endif
+#ifdef USE_DHT22
+    JSON_ADD_INT(cfg_dht22Pin, (int32_t)userConfig->getDHT22Pin());
+    JSON_ADD_STR(cfg_dht22TempFormat, userConfig->getDHT22TempFormat());
 #endif
     JSON_ADD_INT("webRequests", request_count);
     JSON_ADD_INT("webMaxResponseTime", max_response_time);
