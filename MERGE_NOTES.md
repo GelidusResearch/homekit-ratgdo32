@@ -34,7 +34,8 @@ Merged upstream changes from `ratgdo/homekit-ratgdo32` tag `v3.4.3` into `Gelidu
 - **Resolution**: Updated to reflect `homekit-grgdo1` naming convention while adopting upstream version number `v1.2.0` (or `v3.4.3` where appropriate). *Note: `manifest.json` currently points to `v1.2.0` firmware filenames based on local branch state.*
 
 ## Verification
-- **Build**: Successfully compiled using PlatformIO (pio run -e ratgdo_esp32dev) on 2026-02-09.
+- **Build**: Successfully compiled both `rev1` and `rev2` environments using PlatformIO on 2026-02-09.
+- **Build Script**: Updated `x.sh` to automatically build and package both hardware revisions during a release.
 - **Logic**: Verified that `calculatePresence` algorithm in `src/vehicle.cpp` is identical to upstream v3.4.3.
 - **Fixes**: Restored `MAX_DISTANCE` constant in `src/vehicle.cpp` which was lost during initial merge.
 
