@@ -9,35 +9,25 @@ on:
       - 'v*'
 
 permissions:
-  actions: write
+  contents: write
 
 jobs:
-  release:
-    permissions:
-      contents: write
+  build:
+    name: Build Firmware
     runs-on: ubuntu-latest
     strategy:
       matrix:
         environment: [ratgdo_esp32dev, ratgdo_esp32dev_rev1]
-
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
             submodules: true
-            fetch-depth: 0
 
-      - name: Set Tag Name
+      - name: Set Tag
         id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            echo "latestTag=${{ github.event.release.tag_name }}" >> $GITHUB_OUTPUT
-          elif [ "${{ github.event_name }}" = "push" ]; then
-            echo "latestTag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
-          else
-            # Default to git describe or fallback
-            echo "latestTag=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
-          fi
+        run: echo "latestTag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Set Revision Name
         id: rev
@@ -70,42 +60,88 @@ jobs:
           cp bootloader.bin homekit-grgdo1-${REV}-${TAG}.bootloader.bin
           cp partitions.bin homekit-grgdo1-${REV}-${TAG}.partitions.bin
           cp firmware.elf homekit-grgdo1-${REV}-${TAG}.elf
-          
-          # Copy to docs/firmware for committing back to repo
-          mkdir -p ../../../docs/firmware
-          cp homekit-grgdo1-${REV}-${TAG}.* ../../../docs/firmware/
 
-      - name: Update manifests
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ steps.rev.outputs.name }}
+          path: .pio/build/${{ matrix.environment }}/homekit-grgdo1-*
+
+  release:
+    name: Publish Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+            fetch-depth: 0
+
+      - name: Set Tag
+        id: tag
+        run: echo "latestTag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Download All Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Organize Artifacts
+        run: |
+          mkdir -p release_assets
+          # Move files from subdirectories (build-rev1, build-rev2) to a single folder
+          cp artifacts/build-rev1/* release_assets/
+          cp artifacts/build-rev2/* release_assets/
+          ls -l release_assets/
+
+      - name: Update Manifests and Sync to Docs
         run: |
           TAG=${{ steps.tag.outputs.latestTag }}
-          REV=${{ steps.rev.outputs.name }}
+          mkdir -p docs/firmware
           
-          # Update manifest-<rev>.json
+          # Copy binaries to docs/firmware
+          cp release_assets/* docs/firmware/
+          
+          # Update manifest-rev1.json
+          REV="rev1"
           jq ".version = \"${TAG}\" | 
               .builds[0].parts[0].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.bootloader.bin\" |
               .builds[0].parts[1].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.partitions.bin\" |
               .builds[0].parts[3].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.firmware.bin\"" \
               docs/manifest-${REV}.json > temp.json && mv temp.json docs/manifest-${REV}.json
-          
-          # Update main manifest.json if Rev2
-          if [ "$REV" = "rev2" ]; then
-            jq ".version = \"${TAG}\" | 
-                .builds[0].parts[0].path = \"firmware/homekit-grgdo1-rev2-${TAG}.bootloader.bin\" |
-                .builds[0].parts[1].path = \"firmware/homekit-grgdo1-rev2-${TAG}.partitions.bin\" |
-                .builds[0].parts[3].path = \"firmware/homekit-grgdo1-rev2-${TAG}.firmware.bin\"" \
-                docs/manifest.json > temp.json && mv temp.json docs/manifest.json
-          fi
 
-      - name: Upload Release Assets
-        uses: AButler/upload-release-assets@v3.0
-        with:
-          files: ".pio/build/${{ matrix.environment }}/homekit-grgdo1-${{ steps.rev.outputs.name }}-${{ steps.tag.outputs.latestTag }}*"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-          release-tag: ${{ steps.tag.outputs.latestTag }}
+          # Update manifest-rev2.json
+          REV="rev2"
+          jq ".version = \"${TAG}\" | 
+              .builds[0].parts[0].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.bootloader.bin\" |
+              .builds[0].parts[1].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.partitions.bin\" |
+              .builds[0].parts[3].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.firmware.bin\"" \
+              docs/manifest-${REV}.json > temp.json && mv temp.json docs/manifest-${REV}.json
 
-      - name: Commit changes to docs/
+          # Update main manifest.json (Rev2 is default)
+          jq ".version = \"${TAG}\" | 
+              .builds[0].parts[0].path = \"firmware/homekit-grgdo1-rev2-${TAG}.bootloader.bin\" |
+              .builds[0].parts[1].path = \"firmware/homekit-grgdo1-rev2-${TAG}.partitions.bin\" |
+              .builds[0].parts[3].path = \"firmware/homekit-grgdo1-rev2-${TAG}.firmware.bin\"" \
+              docs/manifest.json > temp.json && mv temp.json docs/manifest.json
+
+      - name: Commit and Push Docs
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "Update docs/ for release ${{ steps.tag.outputs.latestTag }} [${{ steps.rev.outputs.name }}]"
+          commit_message: "Update docs/firmware and manifests for release ${{ steps.tag.outputs.latestTag }}"
           file_pattern: 'docs/'
           push_options: '--force'
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release_assets/*
+          tag_name: ${{ steps.tag.outputs.latestTag }}
+          name: Release ${{ steps.tag.outputs.latestTag }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
