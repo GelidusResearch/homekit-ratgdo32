@@ -136,7 +136,6 @@ jobs:
           file_pattern: 'docs/'
           push_options: '--force'
           branch: merge-upstream-v3.4.3
-          branch: merge-upstream-v3.4.3
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
