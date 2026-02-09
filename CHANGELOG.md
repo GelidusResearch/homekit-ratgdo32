@@ -4,13 +4,14 @@
 
 All notable changes to `homekit-ratgdo32` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
-## v1.2.0 (2026-02-09) - Gelidus Research
+## v1.3.0 (2026-02-09) - Gelidus Research
 
 ### What's Changed
 * Merge upstream changes from `ratgdo/homekit-ratgdo32` up to v3.4.3.
 * Add DHT22 Temperature and Humidity sensor support (GRGDO1 hardware specific).
 * Updated `docs/manifest.json` and firmware naming convention for GRGDO1.
 * Build verification with PlatformIO and dependency updates.
+* Fix build system to support both Rev1 and Rev2 revisions.
 
 ---
 
