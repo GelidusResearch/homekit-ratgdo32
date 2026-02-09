@@ -32,6 +32,7 @@ bool vehicle_setup_error = false;
 VL53L1X distanceSensor(&Wire, SENSOR_SHUTDOWN_PIN);
 
 static const int32_t MIN_DISTANCE = 25; // ignore bugs crawling on the distance sensor
+static const int32_t MAX_DISTANCE = 4500; // 4.5 meters, maximum range of the sensor
 
 int16_t vehicleDistance = 0;
 int16_t vehicleThresholdDistance = 1000; // set by user

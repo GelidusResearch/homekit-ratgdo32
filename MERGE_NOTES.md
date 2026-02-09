@@ -33,6 +33,11 @@ Merged upstream changes from `ratgdo/homekit-ratgdo32` tag `v3.4.3` into `Gelidu
 - **Conflict**: Firmware file paths and versioning.
 - **Resolution**: Updated to reflect `homekit-grgdo1` naming convention while adopting upstream version number `v1.2.0` (or `v3.4.3` where appropriate). *Note: `manifest.json` currently points to `v1.2.0` firmware filenames based on local branch state.*
 
+## Verification
+- **Build**: Successfully compiled using PlatformIO (pio run -e ratgdo_esp32dev) on 2026-02-09.
+- **Logic**: Verified that `calculatePresence` algorithm in `src/vehicle.cpp` is identical to upstream v3.4.3.
+- **Fixes**: Restored `MAX_DISTANCE` constant in `src/vehicle.cpp` which was lost during initial merge.
+
 ## Outstanding Items
-- **Verification**: `src/vehicle.cpp` logic needs testing on actual hardware to ensure the old driver code still works with the rest of the updated system.
-- **Dependencies**: Check if `HomeSpan` 2.1.7 is fully compatible with upstream logic changes designed for 2.1.6.
+- **Hardware Testing**: `src/vehicle.cpp` logic should be tested on actual hardware to ensure `VL53L1X` driver remains functional with system updates.
+- **Dependencies**: `HomeSpan` 2.1.7 confirmed compatible via successful build and review of upstream changes (which used 2.1.6).
