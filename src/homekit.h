@@ -63,6 +63,8 @@ extern void notify_homekit_vehicle_departing(bool vehicleDeparting);
 extern void notify_homekit_laser(bool on);
 extern void enable_service_homekit_vehicle(bool enable);
 extern bool enable_service_homekit_laser(bool enable);
+extern bool enable_service_homekit_light(bool enable);
+extern bool enable_service_homekit_motion_sensor(bool enable);
 extern bool enable_service_homekit_room_occupancy(bool enable);
 extern void notify_homekit_room_occupancy(bool occupied);
 #ifdef USE_DHT22

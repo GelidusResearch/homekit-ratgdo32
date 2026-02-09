@@ -86,6 +86,8 @@ constexpr char cfg_syslogPort[] PROGMEM = "syslogPort";
 constexpr char cfg_syslogFacility[] PROGMEM = "syslogFacility";
 constexpr char cfg_logLevel[] PROGMEM = "logLevel";
 constexpr char cfg_dcOpenClose[] PROGMEM = "dcOpenClose";
+constexpr char cfg_dcBypassTTC[] PROGMEM = "dcBypassTTC";
+constexpr char cfg_useToggle[] PROGMEM = "useToggle";
 constexpr char cfg_dcDebounceDuration[] PROGMEM = "dcDebounceDuration";
 constexpr char cfg_useSWserial[] PROGMEM = "useSWserial";
 constexpr char cfg_obstFromStatus[] PROGMEM = "obstFromStatus";
@@ -96,12 +98,17 @@ constexpr char cfg_configFile[] PROGMEM = "user_config";
 #else
 constexpr char cfg_vehicleThreshold[] PROGMEM = "vehicleThreshold";
 constexpr char cfg_vehicleHomeKit[] PROGMEM = "vehicleHomeKit";
+constexpr char cfg_vehicleOccupancyHomeKit[] PROGMEM = "vehicleOccupancyHomeKit";
+constexpr char cfg_vehicleArrivingHomeKit[] PROGMEM = "vehicleArrivingHomeKit";
+constexpr char cfg_vehicleDepartingHomeKit[] PROGMEM = "vehicleDepartingHomeKit";
 constexpr char cfg_laserEnabled[] PROGMEM = "laserEnabled";
 constexpr char cfg_laserHomeKit[] PROGMEM = "laserHomeKit";
 constexpr char cfg_assistDuration[] PROGMEM = "assistDuration";
 constexpr char cfg_occupancyDuration[] PROGMEM = "occupancyDuration";
 constexpr char cfg_enableIPv6[] PROGMEM = "enableIPv6";
 constexpr char cfg_homespanCLI[] PROGMEM = "homespanCLI";
+constexpr char cfg_lightHomeKit[] PROGMEM = "lightHomeKit";
+constexpr char cfg_motionHomeKit[] PROGMEM = "motionHomeKit";
 #endif
 
 constexpr char nvram_id_code[] PROGMEM = "id_code";
@@ -161,18 +168,18 @@ public:
 #define ESP8266_SAVE_CONFIG()
 #endif
 
-    char *getDeviceName() { return (std::get<configStr>(get(cfg_deviceName)).str); };
+    const char *getDeviceName() { return (std::get<configStr>(get(cfg_deviceName)).str); };
     bool getWifiChanged() { return std::get<bool>(get(cfg_wifiChanged)); };
     uint32_t getWifiPower() { return std::get<int>(get(cfg_wifiPower)); };
     uint32_t getWifiPhyMode() { return std::get<int>(get(cfg_wifiPhyMode)); };
     bool getStaticIP() { return std::get<bool>(get(cfg_staticIP)); };
-    char *getLocalIP() { return (std::get<configStr>(get(cfg_localIP)).str); };
-    char *getSubnetMask() { return (std::get<configStr>(get(cfg_subnetMask)).str); };
-    char *getGatewayIP() { return (std::get<configStr>(get(cfg_gatewayIP)).str); };
-    char *getNameserverIP() { return (std::get<configStr>(get(cfg_nameserverIP)).str); };
+    const char *getLocalIP() { return (std::get<configStr>(get(cfg_localIP)).str); };
+    const char *getSubnetMask() { return (std::get<configStr>(get(cfg_subnetMask)).str); };
+    const char *getGatewayIP() { return (std::get<configStr>(get(cfg_gatewayIP)).str); };
+    const char *getNameserverIP() { return (std::get<configStr>(get(cfg_nameserverIP)).str); };
     bool getPasswordRequired() { return std::get<bool>(get(cfg_passwordRequired)); };
-    char *getwwwUsername() { return (std::get<configStr>(get(cfg_wwwUsername)).str); };
-    char *getwwwCredentials() { return (std::get<configStr>(get(cfg_wwwCredentials)).str); };
+    const char *getwwwUsername() { return (std::get<configStr>(get(cfg_wwwUsername)).str); };
+    const char *getwwwCredentials() { return (std::get<configStr>(get(cfg_wwwCredentials)).str); };
     uint32_t getGDOSecurityType() { return std::get<int>(get(cfg_GDOSecurityType)); };
     uint32_t getTTCseconds() { return std::get<int>(get(cfg_TTCseconds)); };
     bool getTTClight() { return std::get<bool>(get(cfg_TTClight)); };
@@ -183,14 +190,16 @@ public:
     uint32_t getDoorUpdateAt() { return std::get<int>(get(cfg_doorUpdateAt)); };
     uint32_t getDoorOpenAt() { return std::get<int>(get(cfg_doorOpenAt)); };
     uint32_t getDoorCloseAt() { return std::get<int>(get(cfg_doorCloseAt)); };
-    char *getTimeZone() { return (std::get<configStr>(get(cfg_timeZone)).str); };
+    const char *getTimeZone() { return (std::get<configStr>(get(cfg_timeZone)).str); };
     bool getSoftAPmode() { return std::get<bool>(get(cfg_softAPmode)); };
     bool getSyslogEn() { return std::get<bool>(get(cfg_syslogEn)); };
-    char *getSyslogIP() { return (std::get<configStr>(get(cfg_syslogIP)).str); };
+    const char *getSyslogIP() { return (std::get<configStr>(get(cfg_syslogIP)).str); };
     uint32_t getSyslogPort() { return std::get<int>(get(cfg_syslogPort)); };
     uint32_t getSyslogFacility() { return std::get<int>(get(cfg_syslogFacility)); };
     uint32_t getLogLevel() { return std::get<int>(get(cfg_logLevel)); };
     bool getDCOpenClose() { return std::get<bool>(get(cfg_dcOpenClose)); };
+    bool getDCBypassTTC() { return std::get<bool>(get(cfg_dcBypassTTC)); };
+    bool getUseToggle() { return std::get<bool>(get(cfg_useToggle)); };
     uint32_t getDCDebounceDuration() { return std::get<int>(get(cfg_dcDebounceDuration)); };
     bool getObstFromStatus() { return std::get<bool>(get(cfg_obstFromStatus)); };
     uint32_t getBuiltInTTC() { return std::get<int>(get(cfg_builtInTTC)); };
@@ -199,6 +208,9 @@ public:
     bool getLaserEnabled() { return std::get<bool>(get(cfg_laserEnabled)); };
     bool getLaserHomeKit() { return std::get<bool>(get(cfg_laserHomeKit)); };
     bool getVehicleHomeKit() { return std::get<bool>(get(cfg_vehicleHomeKit)); };
+    bool getVehicleOccupancyHomeKit() { return std::get<bool>(get(cfg_vehicleOccupancyHomeKit)); };
+    bool getVehicleArrivingHomeKit() { return std::get<bool>(get(cfg_vehicleArrivingHomeKit)); };
+    bool getVehicleDepartingHomeKit() { return std::get<bool>(get(cfg_vehicleDepartingHomeKit)); };
     uint32_t getAssistDuration() { return std::get<int>(get(cfg_assistDuration)); };
 #endif
 #ifndef ESP8266
@@ -206,6 +218,8 @@ public:
     uint32_t getOccupancyDuration() { return std::get<int>(get(cfg_occupancyDuration)); };
     bool getEnableIPv6() { return std::get<bool>(get(cfg_enableIPv6)); };
     bool getEnableHomeSpanCLI() { return std::get<bool>(get(cfg_homespanCLI)); };
+    bool getLightHomeKit() { return std::get<bool>(get(cfg_lightHomeKit)); };
+    bool getMotionHomeKit() { return std::get<bool>(get(cfg_motionHomeKit)); };
 #endif
 #ifdef USE_DHT22
     int getDHT22Pin() { return contains(cfg_dht22Pin) ? std::get<int>(get(cfg_dht22Pin)) : -1; };
