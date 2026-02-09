@@ -21,6 +21,7 @@ jobs:
         uses: actions/checkout@v4
         with:
             submodules: true
+            fetch-depth: 0
 
       - name: Tag
         id: tag
@@ -35,28 +36,6 @@ jobs:
             echo "name=rev1" >> $GITHUB_OUTPUT
           fi
 
-      - name: Update version on manifest.json
-        if: matrix.environment == 'ratgdo_esp32dev'
-        uses: amochkin/action-json@v1
-        with:
-          mode: write
-          file: docs/manifest.json
-          property: version
-          value: ${{ steps.tag.outputs.latestTag }}
-          value_type: string
-
-      - name: Update firmware paths on manifest.json
-        if: matrix.environment == 'ratgdo_esp32dev'
-        uses: amochkin/action-json@v1
-        with:
-          mode: write
-          file: docs/manifest.json
-          property: builds.0.parts.0.path
-          value: firmware/homekit-grgdo1-rev2-${{ steps.tag.outputs.latestTag }}.bootloader.bin
-          value_type: string
-
-      # ... (Truncated for brevity, but logically iterates for all parts)
-
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -69,20 +48,52 @@ jobs:
       - name: Build PlatformIO Project
         run: pio run -e ${{ matrix.environment }}
 
-      - name: Rename and MD5
+      - name: Prepare Artifacts
         run: |
           TAG=${{ steps.tag.outputs.latestTag }}
           REV=${{ steps.rev.outputs.name }}
           cd .pio/build/${{ matrix.environment }}
           md5sum firmware.bin | awk '{print $1}' > homekit-grgdo1-${REV}-${TAG}.firmware.md5
-          mv firmware.bin homekit-grgdo1-${REV}-${TAG}.firmware.bin
-          mv bootloader.bin homekit-grgdo1-${REV}-${TAG}.bootloader.bin
-          mv partitions.bin homekit-grgdo1-${REV}-${TAG}.partitions.bin
-          mv firmware.elf homekit-grgdo1-${REV}-${TAG}.elf
+          cp firmware.bin homekit-grgdo1-${REV}-${TAG}.firmware.bin
+          cp bootloader.bin homekit-grgdo1-${REV}-${TAG}.bootloader.bin
+          cp partitions.bin homekit-grgdo1-${REV}-${TAG}.partitions.bin
+          cp firmware.elf homekit-grgdo1-${REV}-${TAG}.elf
+          
+          # Copy to docs/firmware for committing back to repo
+          mkdir -p ../../../docs/firmware
+          cp homekit-grgdo1-${REV}-${TAG}.* ../../../docs/firmware/
 
-      - name: Upload Assets
+      - name: Update manifests
+        run: |
+          TAG=${{ steps.tag.outputs.latestTag }}
+          REV=${{ steps.rev.outputs.name }}
+          
+          # Update manifest-<rev>.json
+          jq ".version = \"${TAG}\" | 
+              .builds[0].parts[0].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.bootloader.bin\" |
+              .builds[0].parts[1].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.partitions.bin\" |
+              .builds[0].parts[3].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.firmware.bin\"" \
+              docs/manifest-${REV}.json > temp.json && mv temp.json docs/manifest-${REV}.json
+          
+          # Update main manifest.json if Rev2
+          if [ "$REV" = "rev2" ]; then
+            jq ".version = \"${TAG}\" | 
+                .builds[0].parts[0].path = \"firmware/homekit-grgdo1-rev2-${TAG}.bootloader.bin\" |
+                .builds[0].parts[1].path = \"firmware/homekit-grgdo1-rev2-${TAG}.partitions.bin\" |
+                .builds[0].parts[3].path = \"firmware/homekit-grgdo1-rev2-${TAG}.firmware.bin\"" \
+                docs/manifest.json > temp.json && mv temp.json docs/manifest.json
+          fi
+
+      - name: Upload Release Assets
         uses: AButler/upload-release-assets@v3.0
         with:
           files: ".pio/build/${{ matrix.environment }}/homekit-grgdo1-${{ steps.rev.outputs.name }}-${{ steps.tag.outputs.latestTag }}*"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           release-tag: ${{ steps.tag.outputs.latestTag }}
+
+      - name: Commit changes to docs/
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "Update docs/ for release ${{ steps.tag.outputs.latestTag }} [${{ steps.rev.outputs.name }}]"
+          file_pattern: 'docs/'
+          push_options: '--force'
