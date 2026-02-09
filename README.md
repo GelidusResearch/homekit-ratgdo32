@@ -3,6 +3,11 @@
 >
 > This firmware is based on the ESP32-based ratgdo32 and ratgdo32-disco series boards firmware. HomeKit support for the original ESP8266-based v2.5xi devices can be found [here](https://github.com/ratgdo/homekit-ratgdo)
 
+> [!NOTE]
+> Version 3.3.0 is a minor upgrade for ESP32-based ratgdo boards. Almost all source files for the ESP8266 and ESP32 versions of ratgdo have been merged which results in minor changes to the underlying features and function for ESP32 versions. The main benefit is for the original ESP8266-based ratgdo boards.
+>
+> While source files have been merged there remain significant differences between the two board types, most notably in the library used to communicate with HomeKit which are completely different.
+
 # What is HomeKit-RATGDO?
 
 HomeKit-ratgdo32 is alternative firmware for the ratgdo32-series WiFi control boards that works
@@ -20,6 +25,7 @@ This firmware supports Security+, Security+ 2.0 and Dry Contact enabled garage d
 - Motion sensor reporting, if you have a "smart" wall-mounted control panel or with the obstruction sensor
 - Vehicle presence, arrival and departure sensing (ratgdo32-disco board only)
 - Parking assist laser (ratgdo32-disco board only)
+- DHT22 Temperature and Humidity sensor (GRGDO1 specific)
 
 Check the [GitHub Issues](https://github.com/gelidusresearch/homekit-ratgdo32/issues) for planned features, or to suggest your own.
 
@@ -64,6 +70,7 @@ When you first add the device to HomeKit a number of accessories are added:
 * Vehicle departing _motion_ sensor. Only on ratgdo32-disco boards, triggers motion if it detects departure of a vehicle.
 * Vehicle presence _occupancy_ sensor. Only on ratgdo32-disco boards, set if the distance sensor detects presence of a vehicle.
 * Parking assist laser _light switch_. Only on ratgdo32-disco boards.
+* DHT22 Temperature and Humidity sensor (GRGDO1 specific).
 
 Vehicle arrival and departing sensors are only triggered if vehicle motion is detected within 5 minutes of door opening or closing. The parking assist laser is activated when vehicle arrival is detected.
 
