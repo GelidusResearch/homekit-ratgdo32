@@ -1,72 +1,40 @@
-.ccls
-.cache
-.ccls-cache
-.clang_complete
-.gcc-flags.json
+# PlatformIO
 .pio
 .pioenvs
 .piolibdeps
+lib_deps
+.cache
 compile_commands.json
+.gcc-flags.json
+.clang_complete
 
 # Python
+.venv/
+venv/
+ENV/
 __pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-ENV/
-.python-version
-
-# OS/System
-.DS_Store
-._*
-Thumbs.db
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Project specific
-src/www/build/
-CMakeLists.txt
-dependencies.lock
-managed_components/
-sdkconfig.ratgdo_esp32dev
-src/CMakeLists.txt
-.venv/
-venv/
-ENV/
 *.py[cod]
 *$py.class
 .python-version
 .env
 .env.local
-.history
-Thumbs.db
-desktop.ini
-
-.venv/
-.env
-.python-version
-*.py[cod]
-*$py.class
-.idea/
-*.swp
-*.bak
-
-
-
-# Python environment
-.venv/
-venv/
-ENV/
-*.py[cod]
-*$py.class
 
 # OS / IDE
+.DS_Store
+._*
 Thumbs.db
-.history/
+desktop.ini
+.vscode/
+.idea/
 *.swp
 *.swo
+.history/
+
+# Project specific
+src/www/build/
+CMakeLists.txt
+src/CMakeLists.txt
+dependencies.lock
+managed_components/
+sdkconfig.ratgdo_esp32dev
+MERGE_NOTES.md
