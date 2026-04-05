@@ -126,14 +126,19 @@ SoftwareSerial sw_serial;
 #define SECPLUS1_TX_WINDOW_CLOSE 200
 #define SECPLUS1_TX_MINIMUM_DELAY 30
 #define SECPLUS1_EMULATION_POLL_RATE 250
+#define SECPLUS1_EMULATION_COMMS_TIMEOUT (5 * 1000)
 
-#define SECPLUS2_TX_MINIMUM_DELAY 50
+#define SECPLUS2_TX_MINIMUM_DELAY 150
 
-#define COMMS_STATUS_TIMEOUT 2000
+#define COMMS_STATUS_TIMEOUT (3 * 1000) // Allow 3 seconds to retrieve initial status
 bool comms_status_done = false;
-_millis_t comms_status_start = 0;
-_millis_t tx_minimum_delay = SECPLUS2_TX_MINIMUM_DELAY;
+static _millis_t comms_status_start = 0;
+static _millis_t tx_minimum_delay = SECPLUS2_TX_MINIMUM_DELAY;
 uint32_t doorControlType = 0;
+
+// Wall panel sends GDO GetOpenings/GetBattery approx every 22hrs 55mins.
+// That seems an awful long time, how about we do it every 55 minutes?
+#define COMMS_CHECK_BATTERY (/*(22 * 60 * 60 * 1000) + */ (55 * 60 * 1000))
 
 static bool is_0x37_panel = false;
 /* Removing this section as testing with 398LM (a 0x37 wall panel) was never successful.
@@ -149,6 +154,18 @@ static Ticker callbackDelay = Ticker();
 static Ticker checkDoorMoving = Ticker();
 static Ticker checkDoorCompleted = Ticker();
 bool TTCwasLightOn = false;
+static Ticker builtInTTCcountdown = Ticker();
+
+void cancel_builtin_TTC_countdown()
+{
+    if (builtInTTCcountdown.active())
+    {
+        ESP_LOGI(TAG, "Ending automatic close countdown timer");
+        builtInTTCcountdown.detach();
+    }
+    garage_door.builtInTTCremaining = 0;
+    garage_door.builtInTTChold = false;
+}
 
 struct DoorHistory openHistory = {0};
 struct DoorHistory closeHistory = {0};
@@ -252,7 +269,6 @@ void IRAM_ATTR isr_obstruction()
     obstruction_sensor.low_count++;
 }
 
-#ifndef USE_GDOLIB
 // Becomes set from ISR / IRQ callback function.
 static bool rxPending;
 void IRAM_ATTR receiveHandler()
@@ -281,7 +297,6 @@ __attribute__((always_inline)) inline bool isRxPending()
 #endif
     return pending;
 }
-#endif // USE_GDOLIB
 
 /****************************** COMMON SETTING *********************************/
 #define MAX_COMMS_RETRY 10
@@ -293,8 +308,9 @@ uint32_t rolling_code = 0;
 #endif // USE_GDOLIB
 
 uint32_t last_saved_code = 0;
-static bool rolling_code_operation_in_progress = false;
 #define MAX_CODES_WITHOUT_FLASH_WRITE 10
+
+static _millis_t stopSentClosePending = 0;
 
 /******************************* SECURITY 1.0 *********************************/
 #ifndef USE_GDOLIB
@@ -504,6 +520,37 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
 /****************************************************************************
  * Initialize communications with garage door.
  */
+
+void initialize_gdo_codes(uint32_t id)
+{
+    if (doorControlType != 2)
+        return;
+
+    if (id)
+    {
+        // We have an ID code, retrieve last saved rolling code which may be behind what the GDO thinks.
+        // Increment rolling code so that it will be ahead of what the GDO thinks it should be.
+        rolling_code = read_door_int(nvram_rolling) + MAX_CODES_WITHOUT_FLASH_WRITE;
+        id_code = id;
+    }
+    else
+    {
+        ESP_LOGI(TAG, "Generate a new random ID code for Sec+2.0");
+        id_code = (random(0x1, 0xFFF) << 12) | 0x539;
+        write_door_int(nvram_id_code, id_code);
+        rolling_code = 0;
+    }
+    ESP_LOGI(TAG, "Our ID code %lu (0x%02lX)", id_code, id_code);
+    ESP_LOGI(TAG, "Our rolling code %lu (0x%02X)", rolling_code, rolling_code);
+    save_rolling_code();
+
+    // Series of get openings and status syncs the GDO with our rolling code.
+    send_get_openings();
+    send_get_status();
+    send_get_openings();
+    send_get_status();
+}
+
 void setup_comms()
 {
     if (comms_setup_done)
@@ -559,27 +606,8 @@ void setup_comms()
         sw_serial.enableIntTx(false);
         sw_serial.enableAutoBaud(true); // found in ratgdo/espsoftwareserial branch autobaud
 
-        id_code = read_door_int(nvram_id_code);
-        if (!id_code)
-        {
-            ESP_LOGI(TAG, "id code not found");
-            id_code = (random(0x1, 0xFFF) << 12) | 0x539;
-            write_door_int(nvram_id_code, id_code);
-        }
-        ESP_LOGI(TAG, "id code %lu (0x%02lX)", id_code, id_code);
-
         // read from flash, default of 0 if file not exist
-        rolling_code = read_door_int(nvram_rolling);
-        // last saved rolling code may be behind what the GDO thinks, so bump it up so that it will
-        // always be ahead of what the GDO thinks it should be, and save it.
-        rolling_code = (rolling_code != 0) ? rolling_code + MAX_CODES_WITHOUT_FLASH_WRITE : 0;
-        save_rolling_code();
-        ESP_LOGI(TAG, "rolling code %lu (0x%02X)", rolling_code, rolling_code);
-        // Series of get openings and status syncs the GDO with our rolling code.
-        send_get_openings();
-        send_get_status();
-        send_get_openings();
-        send_get_status();
+        initialize_gdo_codes(read_door_int(nvram_id_code));
     }
     else
     {
@@ -744,7 +772,6 @@ void setup_comms()
              closeHistory(1), closeHistory(2), closeHistory(3), closeHistory(4), closeHistory(5), closeHistory(6), garage_door.closeDuration);
 
     comms_setup_done = true;
-    comms_status_start = _millis();
 }
 
 /****************************************************************************
@@ -782,10 +809,6 @@ void save_rolling_code()
 {
     if (doorControlType != 2)
         return;
-    // Prevent concurrent rolling code operations
-    if (rolling_code_operation_in_progress)
-        return;
-    rolling_code_operation_in_progress = true;
 
 #ifdef USE_GDOLIB
     if (gdo_status.rolling_code != 0)
@@ -797,7 +820,6 @@ void save_rolling_code()
     write_door_int(nvram_rolling, rolling_code);
     last_saved_code = rolling_code;
 #endif // !USE_GDOLIB
-    rolling_code_operation_in_progress = false;
 }
 
 void reset_door()
@@ -870,7 +892,7 @@ void wallPlate_Emulation()
             // If not then we will redo the initialization sequence.
             static bool success = false;
             static _millis_t lastCheck = currentMillis;
-            if (!success && (currentMillis - lastCheck) > 5000)
+            if (!success && (currentMillis - lastCheck) > SECPLUS1_EMULATION_COMMS_TIMEOUT)
             {
                 lastCheck = currentMillis;
                 if (garage_door.current_state == (GarageDoorCurrentState)0xFF)
@@ -953,7 +975,7 @@ void update_door_state(GarageDoorCurrentState current_state)
                            : GarageDoorTargetState::TGT_OPEN;
         break;
     default:
-        ESP_LOGE(TAG, "Got unknown door state");
+        ESP_LOGE(TAG, "Update to unknown door state: %d", current_state);
         break;
     } // end switch
 
@@ -969,6 +991,8 @@ void update_door_state(GarageDoorCurrentState current_state)
             // This will force us to send current state to browser, so it reports correct state.
             last_reported_garage_door.current_state = (GarageDoorCurrentState)0xFF;
         }
+        // If we were in a automatic close timeout, cancel and reset that.
+        cancel_builtin_TTC_countdown();
         // Fall through to "opening"
     case GarageDoorCurrentState::CURR_OPENING:
         // Terminate the timer that confirms that a door open/close actually worked.
@@ -1289,6 +1313,12 @@ void sec1_process_message(uint8_t key, uint8_t value = 0xFF)
             break;
         }
         update_door_state(current_state);
+
+        if (!comms_status_done)
+        {
+            ESP_LOGI(TAG, "GDO initialization complete, status received (%lldms)", (uint64_t)(comms_status_start ? (_millis() - comms_status_start) : 0));
+            comms_status_done = true;
+        }
         break;
     }
 
@@ -1655,6 +1685,12 @@ readIn:
         // check for wall panel and provide emulator
         wallPlate_Emulation();
     }
+
+    if (!comms_status_done && comms_status_start && (_millis() - comms_status_start) > COMMS_STATUS_TIMEOUT)
+    {
+        ESP_LOGW(TAG, "Garage door is not responding to initialization sequence (timeout after %dms)", COMMS_STATUS_TIMEOUT);
+        comms_status_start = 0;
+    }
 }
 
 /****************************************************************************
@@ -1673,13 +1709,7 @@ void comms_loop_sec2()
         static _millis_t lastStatusPkt = 0;
         // We have a full packet, process it.
         Packet pkt = Packet(reader.fetch_buf());
-
-        if ((esp_log_level_t)userConfig->getLogLevel() <= esp_log_level_t::ESP_LOG_INFO)
-        {
-            // If log level is Debug or higher then Packet() will have already logged it.
-            // This one logs at Info level.
-            pkt.print();
-        }
+        pkt.print();
 
         switch (pkt.m_pkt_cmd)
         {
@@ -1705,7 +1735,7 @@ void comms_loop_sec2()
                 current_state = GarageDoorCurrentState::CURR_CLOSING;
                 break;
             default:
-                ESP_LOGE(TAG, "Got unknown door state");
+                ESP_LOGE(TAG, "Got unknown Sec+2.0 door state: %d", pkt.m_data.value.status.door);
                 current_state = (GarageDoorCurrentState)0xFF;
                 break;
             }
@@ -1753,7 +1783,27 @@ void comms_loop_sec2()
                 }
             }
 
-            comms_status_done = true;
+            if (stopSentClosePending)
+            {
+                if (_millis() - stopSentClosePending < 1000)
+                {
+                    // We sent a stop command, and have received a response from the GDO. So now will followup with the close command.
+                    stopSentClosePending = 0;
+                    close_door();
+                }
+                else
+                {
+                    stopSentClosePending = 0;
+                    ESP_LOGI(TAG, "Door did not respond to our stop command in time (1 second), do not send close command");
+                }
+            }
+
+            if (!comms_status_done && comms_status_start)
+            {
+                ESP_LOGI(TAG, "GDO initialization complete, status received (%lldms)", (uint64_t)(_millis() - comms_status_start));
+                comms_status_done = true;
+                send_get_battery();
+            }
             break;
         }
 
@@ -1917,8 +1967,9 @@ void comms_loop_sec2()
 
         case PacketCommand::GetStatus:
         case PacketCommand::GetOpenings:
+        case PacketCommand::GetBattery:
         {
-            // Silently ignore, because we see lots of these and they have no data, and Packet.h logged them.
+            // Silently ignore.
             break;
         }
 
@@ -1964,14 +2015,60 @@ void comms_loop_sec2()
                 userConfig->set(cfg_builtInTTC, secs);
                 ESP8266_SAVE_CONFIG();
             }
+
+            if ((garage_door.current_state == GarageDoorCurrentState::CURR_OPENING || garage_door.current_state == GarageDoorCurrentState::CURR_OPEN) && secs > 0)
+            {
+                garage_door.builtInTTCremaining = secs;
+                garage_door.builtInTTChold = false;
+                if (!builtInTTCcountdown.active())
+                {
+                    ESP_LOGI(TAG, "Start automatic close countdown timer");
+                    // start a timer that will count down number of seconds remaining in built-in automatic close timer.
+                    builtInTTCcountdown.attach_ms(1000, []()
+                                                  { if (garage_door.builtInTTChold) return;
+                                                    if (--garage_door.builtInTTCremaining == 0)builtInTTCcountdown.detach(); });
+                }
+            }
+            else
+            {
+                cancel_builtin_TTC_countdown();
+            }
+
             break;
         }
 
         case PacketCommand::CancelTtc:
         {
-            garage_door.builtInTTC = 0;
-            userConfig->set(cfg_builtInTTC, 0);
-            ESP8266_SAVE_CONFIG();
+            switch (pkt.m_data.value.cancel_ttc.state)
+            {
+            case CancelTtcState::Cancel:
+            {
+                cancel_builtin_TTC_countdown();
+                garage_door.builtInTTC = 0;
+                userConfig->set(cfg_builtInTTC, 0);
+                ESP8266_SAVE_CONFIG();
+                break;
+            }
+            case CancelTtcState::Hold:
+            {
+                if (builtInTTCcountdown.active())
+                {
+                    garage_door.builtInTTChold = !garage_door.builtInTTChold;
+                    ESP_LOGI(TAG, "Automatic close time-to-close hold %s %d seconds remaining", garage_door.builtInTTChold ? "at" : "released at", garage_door.builtInTTCremaining);
+                }
+                else
+                {
+                    garage_door.builtInTTChold = false;
+                    ESP_LOGI(TAG, "Received unexpected CancelTtc hold as countdown not active");
+                }
+                break;
+            }
+            default:
+            {
+                ESP_LOGI(TAG, "Unknown CancelTtc state: 0x%0X", pkt.m_data.value.cancel_ttc.state);
+                break;
+            }
+            }
             break;
         }
 
@@ -2008,10 +2105,10 @@ void comms_loop_sec2()
             case Pair3State::CancelAck:
                 break;
             case Pair3State::WarningStart:
-                ESP_LOGI(TAG, "Door close warning sequence start");
+                // ESP_LOGI(TAG, "Door close warning sequence start");
                 break;
             case Pair3State::WarningEnd:
-                ESP_LOGI(TAG, "Door close warning sequence end");
+                // ESP_LOGI(TAG, "Door close warning sequence end");
                 break;
             case Pair3State::ObstBlocked:
                 break;
@@ -2022,10 +2119,14 @@ void comms_loop_sec2()
         case PacketCommand::Unknown:
         {
             // Typically occurs if there is a fail-to-decode packet error.  This could be a regular status update.
-            // If it has been more than 5 minutes since the last status packet then request GDO to resend one.
-            if (_millis() - lastStatusPkt > (5 * 60 * 1000) || lastStatusPkt == 0)
+            // If it has been more than 5 minutes since the last status packet then request GDO to resend one, or
+            // if we are in the middle of an open or close sequence as we might have missed the state change to open or closed.
+            if (_millis() - lastStatusPkt > (5 * 60 * 1000) ||
+                lastStatusPkt == 0 ||
+                garage_door.current_state == GarageDoorCurrentState::CURR_OPENING ||
+                garage_door.current_state == GarageDoorCurrentState::CURR_CLOSING)
             {
-                ESP_LOGD(TAG, "Missed a status packet, requsting GDO to resend");
+                ESP_LOGD(TAG, "Possibly missed a status packet, requesting GDO to resend");
                 send_get_status();
             }
             break;
@@ -2033,7 +2134,7 @@ void comms_loop_sec2()
 
         default:
             // Log if we get a command that we do not recognize.
-            ESP_LOGD(TAG, "Support for %s packet unimplemented. Ignoring.", PacketCommand::to_string(pkt.m_pkt_cmd));
+            ESP_LOGD(TAG, "Support for %s (0x%04X) packet unimplemented. Ignoring.", PacketCommand::to_string(pkt.m_pkt_cmd), pkt.m_pkt_cmd);
             break;
         }
     }
@@ -2043,10 +2144,30 @@ void comms_loop_sec2()
         process_send_queue();
     }
 
-    // Only check if no rolling code operation is in progress to prevent race conditions
-    if (!rolling_code_operation_in_progress && rolling_code >= (last_saved_code + MAX_CODES_WITHOUT_FLASH_WRITE))
+    if (!comms_status_done && comms_status_start && (_millis() - comms_status_start) > COMMS_STATUS_TIMEOUT)
     {
-        save_rolling_code();
+        ESP_LOGW(TAG, "Garage door is not responding to initialization sequence, reset Sec+2.0 and try again (timeout after %dms)", COMMS_STATUS_TIMEOUT);
+        comms_status_start = 0;
+        initialize_gdo_codes(0); // sending a zero will force a new ID code
+    }
+    else
+    {
+        // communications with GDO is working...
+
+        static _millis_t checkStatus = 0;
+        _millis_t now = _millis();
+        if ((now - checkStatus) > COMMS_CHECK_BATTERY)
+        {
+            // Wall panel sends a GetOpenings and GetBattery request once a day, emulate that behavior.
+            checkStatus = now;
+            send_get_openings();
+            send_get_battery();
+        }
+
+        if (rolling_code >= (last_saved_code + MAX_CODES_WITHOUT_FLASH_WRITE))
+        {
+            save_rolling_code();
+        }
     }
 }
 
@@ -2066,16 +2187,6 @@ void comms_loop()
         return;
 
     _millis_t current_millis = _millis();
-    // wait for a status command to be processes to properly set the initial state of
-    // all homekit characteristics.  Also timeout if we don't receive a status in
-    // a reasonable amount of time.  This prevents unintentional state changes if
-    // a home hub reads the state before we initialize everything
-    // Note, secplus1 doesnt have a status command so it will just timeout
-    if (!comms_status_done && (current_millis - comms_status_start > COMMS_STATUS_TIMEOUT))
-    {
-        ESP_LOGI(TAG, "Comms initial status timeout");
-        comms_status_done = true;
-    }
 
 #ifdef ESP32
     // Room Occupancy Clear Timer
@@ -2173,6 +2284,12 @@ bool transmitSec1(byte toSend)
 
         ESP_LOGD(TAG, "SEC1 TX 0x%02X (%s)", toSend, SEC1_CMD(toSend));
     }
+    else if (!comms_status_done && !comms_status_start && toSend == secplus1Codes::QueryDoorStatus)
+    {
+        // First time we send a status poll command start timeout so we can tell if the GDO is responding to us.
+        comms_status_start = _millis();
+        ESP_LOGI(TAG, "Start GDO initialization timeout for %dms", COMMS_STATUS_TIMEOUT);
+    }
 
     // aprox 10ms to write byte
     // every byte we send echos, but want the echo on polls to id the GDO response
@@ -2256,32 +2373,33 @@ bool transmitSec2(PacketAction &pkt_ac)
         ESP_LOGI(TAG, "Collision detected, waiting to send packet");
         return false;
     }
+
+    if (!comms_status_done && !comms_status_start)
+    {
+        // First time we send a packet start a timeout so we can tell if the GDO is responding to us.
+        comms_status_start = _millis();
+        ESP_LOGI(TAG, "Start GDO initialization timeout for %dms", COMMS_STATUS_TIMEOUT);
+    }
+
+    uint8_t buf[SECPLUS2_CODE_LEN];
+    if (pkt_ac.pkt.encode(rolling_code, buf) != 0)
+    {
+        ESP_LOGE(TAG, "Could not encode packet");
+    }
     else
     {
-        uint8_t buf[SECPLUS2_CODE_LEN];
-        if (pkt_ac.pkt.encode(rolling_code, buf) != 0)
-        {
-            ESP_LOGE(TAG, "Could not encode packet");
-            pkt_ac.pkt.print();
-        }
-        else
-        {
-            // Use LED to signal activity
-            led.flash(FLASH_ACTIVITY_MS);
-            sw_serial.write(buf, SECPLUS2_CODE_LEN);
-            delayMicroseconds(100);
-            // timestamp tx
-            last_tx = _millis();
-        }
+        // Use LED to signal activity
+        led.flash(FLASH_ACTIVITY_MS);
+        sw_serial.write(buf, SECPLUS2_CODE_LEN);
+        delayMicroseconds(100);
+        // timestamp tx
+        last_tx = _millis();
+    }
+    pkt_ac.pkt.print();
 
-        if (pkt_ac.inc_counter)
-        {
-            // Protect rolling code increment from concurrent access
-            if (!rolling_code_operation_in_progress)
-            {
-                rolling_code = (rolling_code + 1) & 0xfffffff;
-            }
-        }
+    if (pkt_ac.inc_counter)
+    {
+        rolling_code = (rolling_code + 1) & 0xfffffff;
     }
 
     return true;
@@ -2370,14 +2488,25 @@ void door_command_close()
 #ifdef USE_GDOLIB
     gdo_door_close();
 #else
-    if (garage_door.pinModeObstructionSensor)
+    if (garage_door.pinModeObstructionSensor && !userConfig->getUseToggle())
     {
         door_command(DoorAction::Close);
     }
-    else if (garage_door.current_state == GarageDoorCurrentState::CURR_OPEN)
+    else
     {
-        ESP_LOGD(TAG, "No obstruction sensors detected. Close door using TOGGLE");
-        door_command(DoorAction::Toggle);
+        ESP_LOGI(TAG, "Toggle from current state: %s, target state: %s", DOOR_STATE(garage_door.current_state), DOOR_STATE(garage_door.target_state));
+        if (garage_door.current_state == GarageDoorCurrentState::CURR_OPEN)
+        {
+            door_command(DoorAction::Toggle);
+        }
+        else if (garage_door.current_state == GarageDoorCurrentState::CURR_STOPPED)
+        {
+            door_command(DoorAction::Toggle);
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Ignoring close request for current and target state");
+        }
     }
 
     if (doorControlType == 2 && garage_door.closeDuration > 0)
@@ -2588,7 +2717,7 @@ void delayFnCall(uint32_t ms, void (*callback)())
                        });
 }
 
-GarageDoorCurrentState close_door()
+GarageDoorCurrentState close_door(bool bypass_ttc)
 {
     if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSED)
     {
@@ -2598,6 +2727,8 @@ GarageDoorCurrentState close_door()
         return GarageDoorCurrentState::CURR_CLOSED;
     }
 
+    cancel_builtin_TTC_countdown();
+
     if (garage_door.current_state == GarageDoorCurrentState::CURR_OPENING)
     {
         ESP_LOGI(TAG, "Door already opening; do stop");
@@ -2606,11 +2737,24 @@ GarageDoorCurrentState close_door()
 #else
         door_command(DoorAction::Stop);
 #endif
+        stopSentClosePending = _millis();
         return GarageDoorCurrentState::CURR_STOPPED;
     }
 
-    if (userConfig->getTTCseconds() == 0)
+    if (bypass_ttc && TTCtimer.active())
     {
+        ESP_LOGI(TAG, "Canceling TTC delay timer for hardwired control");
+        TTCtimer.detach();
+        set_light(TTCwasLightOn);
+    }
+
+    bool immediateClose = (userConfig->getTTCseconds() == 0) || bypass_ttc;
+    if (immediateClose)
+    {
+        if (bypass_ttc && userConfig->getTTCseconds() != 0)
+        {
+            ESP_LOGI(TAG, "Bypassing time-to-close delay for hardwired control");
+        }
         ESP_LOGI(TAG, "Closing door");
         door_command_close();
     }
@@ -2648,6 +2792,33 @@ GarageDoorCurrentState close_door()
     return GarageDoorCurrentState::CURR_CLOSING;
 }
 
+#if defined(ESP8266) || !defined(USE_GDOLIB)
+GarageDoorCurrentState toggle_door(bool bypass_ttc)
+{
+    ESP_LOGI(TAG, "Toggling door via hardwired control");
+    if (doorControlType == 3)
+    {
+        ESP_LOGW(TAG, "Toggle requested in dry contact mode; ignored");
+        return garage_door.current_state;
+    }
+
+    if (TTCtimer.active())
+    {
+        ESP_LOGI(TAG, "Canceling TTC delay timer prior to toggle");
+        TTCtimer.detach();
+        set_light(TTCwasLightOn);
+    }
+
+    if (bypass_ttc && userConfig->getTTCseconds() != 0)
+    {
+        ESP_LOGI(TAG, "Bypassing time-to-close delay for hardwired toggle");
+    }
+
+    door_command(DoorAction::Toggle);
+    return garage_door.current_state;
+}
+#endif
+
 #ifndef USE_GDOLIB
 void send_get_status()
 {
@@ -2673,8 +2844,9 @@ void send_get_openings()
         return;
 
     PacketData d;
-    d.type = PacketDataType::NoData;
-    d.value.no_data = NoData();
+    d.type = PacketDataType::Unknown;
+    d.value.unknown = UnknownCommandData();
+    d.value.unknown.flags = 0x01;
     Packet pkt = Packet(PacketCommand::GetOpenings, d, id_code);
     PacketAction pkt_ac = {pkt, true, 0};
     if (!txQueuePush(&pkt_ac))
@@ -2683,11 +2855,31 @@ void send_get_openings()
     }
 }
 
+void send_get_battery()
+{
+    // only used with SECURITY2.0
+    if (doorControlType != 2)
+        return;
+
+    PacketData d;
+    d.type = PacketDataType::Unknown;
+    d.value.unknown = UnknownCommandData();
+    d.value.unknown.flags = 0x05;
+    Packet pkt = Packet(PacketCommand::GetBattery, d, id_code);
+    PacketAction pkt_ac = {pkt, true, 0};
+    if (!txQueuePush(&pkt_ac))
+    {
+        ESP_LOGE(TAG, "packet queue full, dropping get battery pkt");
+    }
+}
+
 void send_cancel_ttc()
 {
     // only used with SECURITY2.0
     if (doorControlType != 2)
         return;
+
+    cancel_builtin_TTC_countdown();
 
     PacketData d;
     d.type = PacketDataType::CancelTtc;

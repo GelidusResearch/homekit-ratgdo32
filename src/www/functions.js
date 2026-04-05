@@ -23,10 +23,6 @@ var setGDOcmds = {              // setGDO commands that are not sent from server
 var gitUser = "gelidusresearch";         // default git user.
 var gitRepo = "homekit-ratgdo32"; // default git repository.
 
-// https://stackoverflow.com/questions/7995752/detect-desktop-browser-not-mobile-with-javascript
-// const isTouchDevice = function () { return 'ontouchstart' in window || 'onmsgesturechange' in window; };
-// const isDesktop = window.screenX != 0 && !isTouchDevice() ? true : false;
-
 // See... https://github.com/nayarsystems/posix_tz_db
 // This is CSV form of the data, available at this web page.
 const timeZonesURL = "https://raw.githubusercontent.com/nayarsystems/posix_tz_db/refs/heads/master/zones.csv";
@@ -144,19 +140,34 @@ function toggleSyslog() {
 
 function toggleDCOpenClose(radio) {
     let value = radio.value;
-    document.getElementById("dcOpenCloseRow").style.display = (value != 3) ? "table-row" : "none";
     if (serverStatus["useSWserial"] != undefined) {
-        document.getElementById("useSWserialRow").style.display = (value != 3) ? "table-row" : "none";
+        document.getElementById("useSWserialRow").style.display = "table-row";
+        document.getElementById("useSWserial").disabled = (value == 3);
     }
-    document.getElementById("obstFromStatusRow").style.display = (value != 3) ? "table-row" : "none";
-    document.getElementById("dcDebounceDurationRow").style.display = (value == 3) ? "table-row" : "none";
+    document.getElementById("dcOpenClose").disabled = (value == 3);
+    document.getElementById("obstFromStatus").disabled = (value == 3);
+    document.getElementById("useToggle").disabled = (value != 2);
+    document.getElementById("homekitLight").disabled = (value == 3);
+    document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
+    document.getElementById("dcDebounceDuration").disabled = (value != 3);
+    document.getElementById("motionMotion").disabled = (value != 2);
+    toggleHardwiredBypassRow();
+}
+
+function toggleHardwiredBypassRow() {
+    const supportsHardwired = !document.getElementById("gdodrycontact").checked;
+    const hardwiredEnabled = document.getElementById("dcOpenClose").checked;
+    const checkbox = document.getElementById("dcBypassTTC");
+    const enabled = supportsHardwired && hardwiredEnabled;
+    checkbox.disabled = !enabled;
 }
 
 // enable laser
 function enableLaser(value) {
     document.getElementById('laserHomeKit').disabled = !value;
     document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
-    document.getElementById("parkAssist").style.display = (value) ? "table-row" : "none";
+    document.getElementById("assistDuration").disabled = !value;
+    document.getElementById("parkAssist").style.opacity = value ? "1" : "0.5";
 }
 
 // Show or hide the static IP fields
@@ -172,7 +183,8 @@ function toggleStaticIP() {
 
 // Show or hide the syslog IP field
 function toggleTimeZone() {
-    document.getElementById("timeZoneTable").style.display = (this.event.target.checked) ? "table" : "none";
+    document.getElementById("timeZoneRow").style.opacity = (this.event.target.checked) ? 1 : 0.5;
+    document.getElementById("timeZoneInput").disabled = !this.event.target.checked;
     // called for both checked and unchecked... to reset selection if necessary.
     loadTZinfo(document.getElementById("timeZoneInput"));
 }
@@ -280,8 +292,54 @@ function capitalizeFirstLetter(val) {
     return String(val).charAt(0).toUpperCase() + String(val).slice(1);
 }
 
+// Show or hide the warning about GDO's built-in automatic close timer
+function showTTCwarning(TTCvalue, TTCremaining, TTChold) {
+    if (TTCvalue == 0) {
+        // built-in automatic close is off, hide the warning
+        document.getElementById("builtInTTCValue").innerText = "Off";
+        document.getElementById("builtInUnits").style.display = "none";
+        document.getElementById("builtInWarning").style.display = "none";
+        document.getElementById("autoCloseWarning").style.display = "none";
+    }
+    else {
+        // built-in automatic close is enabled for TTCvalue seconds
+        if (TTCremaining) {
+            // If we are in active countdown display mins:secs until time out
+            let units = "minutes";
+            let mins = Math.floor(TTCremaining / 60);
+            const secs = (TTCremaining % 60 < 10) ? '0' + (TTCremaining % 60) : (TTCremaining % 60);
+            if (mins > 0) {
+                mins = mins + ':';
+            } else {
+                mins = "";
+                units = "seconds";
+            }
+            if (TTChold) {
+                // Active countdown is on hold
+                document.getElementById("autoCloseValue").innerHTML = `holding&nbsp;at&nbsp;${mins}${secs}&nbsp;${units}`;
+            }
+            else {
+                document.getElementById("autoCloseValue").innerHTML = `in&nbsp;${mins}${secs}&nbsp;${units}`;
+            }
+        } else {
+            // If not in countdown then display minutes that automatic close is set at
+            const mins = Math.floor(TTCvalue / 60);
+            const secs = (TTCvalue % 60 == 0) ? "" : (TTCvalue % 60 < 10) ? ':0' + (TTCvalue % 60) : ':' + (TTCvalue % 60);
+            document.getElementById("autoCloseValue").innerHTML = `set&nbsp;for&nbsp;${mins}${secs}&nbsp;minutes`;
+        }
+        // And make everything visible
+        document.getElementById("builtInTTCValue").innerText = Math.floor(TTCvalue / 60);;
+        document.getElementById("builtInUnits").style.display = "inline";
+        document.getElementById("builtInWarning").style.display = "inline";
+        document.getElementById("autoCloseWarning").style.display = "";
+    }
+}
+
 // Update all elements on HTML page to reflect status
 function setElementsFromStatus(status) {
+    // If this is called because we are loading the page then status will contain every serverStatus setting.
+    // However if this is called because server is notifying us of a status change, then the object contains
+    // only those values that have changed. upTime value will always be included, but that is the only one.
     let date = new Date();
     if (status.timeZone) {
         // Do timezone first, as some other values depend on this
@@ -338,13 +396,18 @@ function setElementsFromStatus(status) {
                 document.getElementById("doorButton").style.margin = (value != 3) ? "" : "auto"; // auto will center the button
                 document.getElementById("lightButton").style.display = (value != 3) ? "inline-block" : "none";
                 document.getElementById("lockLightRow").style.display = (value != 3) ? "table-row" : "none";
-                document.getElementById("dcOpenCloseRow").style.display = (value != 3) ? "table-row" : "none";
                 if (serverStatus["useSWserial"] != undefined) {
-                    document.getElementById("useSWserialRow").style.display = (value != 3) ? "table-row" : "none";
+                    document.getElementById("useSWserialRow").style.display = "table-row";
+                    document.getElementById("useSWserial").disabled = (value == 3);
                 }
-                document.getElementById("obstFromStatusRow").style.display = (value != 3) ? "table-row" : "none";
-                document.getElementById("dcDebounceDurationRow").style.display = (value == 3) ? "table-row" : "none";
-                document.getElementById("motionMotion").disabled = (value == 2) ? false : true;
+                document.getElementById("dcOpenClose").disabled = (value == 3);
+                document.getElementById("obstFromStatus").disabled = (value == 3);
+                document.getElementById("useToggle").disabled = (value != 2);
+                document.getElementById("homekitLight").disabled = (value == 3);
+                document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
+                document.getElementById("dcDebounceDuration").disabled = (value != 3);
+                document.getElementById("motionMotion").disabled = (value != 2);
+                toggleHardwiredBypassRow();
                 break;
             case "pinBasedObst":
                 document.getElementById(key).innerHTML = (value == true) ? "&nbsp;(Pin-based)" : "&nbsp;(Message)";
@@ -375,24 +438,45 @@ function setElementsFromStatus(status) {
                 break;
             case "TTCseconds":
                 document.getElementById(key).value = (value <= 10) ? value : (value <= 20) ? (value - 10) / 5 + 10 : 21;
-                document.getElementById("TTCsecondsValue").innerText = value;
+                if (value > 0) {
+                    document.getElementById("TTCsecondsValue").innerText = value;
+                    document.getElementById("TTCunits").style.display = "inline";
+                } else {
+                    document.getElementById("TTCsecondsValue").innerText = "Off";
+                    document.getElementById("TTCunits").style.display = "none";
+                }
                 document.getElementById("TTCwarning").style.display = (value < 5) ? "inline" : "none";
                 break;
             case "builtInTTC":
                 document.getElementById(key).value = (value <= 600) ? value / 60 : (value <= 3600) ? (value - 600) / 300 + 10 : 20;
-                document.getElementById("builtInTTCValue").innerText = (value / 60).toFixed(1).replace(/\.?0+$/, "");
+                // We have to use global serverStatus rather than local status as local one only contains
+                // values to be updated... which may not include the other built-in TTC values
+                showTTCwarning(value, serverStatus.builtInTTCremaining, serverStatus.builtInTTChold);
+                break;
+            case "builtInTTCremaining":
+                showTTCwarning(serverStatus.builtInTTC, value, serverStatus.builtInTTChold);
+                break;
+            case "builtInTTChold":
+                showTTCwarning(serverStatus.builtInTTC, serverStatus.builtInTTCremaining, value);
                 break;
             case "occupancyDuration":
                 let mins = value / 60;
                 document.getElementById(key).value = (mins <= 10) ? mins : (mins <= 32) ? (mins - 10) / 5 + 10 : 0;
-                document.getElementById("occupancyValue").innerHTML = mins;
+                if (mins > 0) {
+                    document.getElementById("occupancyValue").innerHTML = mins;
+                    document.getElementById("occupancyUnits").style.display = "inline";
+                }
+                else {
+                    document.getElementById("occupancyValue").innerHTML = "Off";
+                    document.getElementById("occupancyUnits").style.display = "none";
+                }
                 document.getElementById("trOccupancyDuration").style.display = "table-row";
                 break;
             case "distanceSensor":
                 document.getElementById("vehicleRow").style.display = (value) ? "table-row" : "none";
                 document.getElementById("vehicleSetting").style.display = (value) ? "table-row" : "none";
                 document.getElementById("vehicleSettingsSpacer").style.display = (value) ? "table-row" : "none";
-                document.getElementById("vehicleHomeKitRow").style.display = (value) ? "table-row" : "none";
+                setVehicleConfigVisibility(value);
                 document.getElementById("laserSetting").style.display = (value) ? "table-row" : "none";
                 break;
             case "vehicleThreshold":
@@ -414,11 +498,35 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).checked = value;
                 document.getElementById("homespanSetting").style.display = "table-row";
                 break;
-            case "laserHomeKit":
+            case "homekitLight":
+                document.getElementById(key).checked = value;
+                document.getElementById("homekitLightRow").style.display = "table-row";
+                break;
+            case "motionHomeKit":
+                document.getElementById(key).checked = value;
+                document.getElementById("homekitMotionRow").style.display = "table-row";
+                break;
             case "vehicleHomeKit":
-            case "dcOpenClose":
+                document.getElementById(key).checked = value;
+                setVehicleSensorOptionState(value);
+                break;
+            case "laserHomeKit":
+            case "useToggle":
             case "useSWserial":
             case "obstFromStatus":
+                document.getElementById(key).checked = value;
+                break;
+            case "dcOpenClose":
+                document.getElementById(key).checked = value;
+                toggleHardwiredBypassRow();
+                break;
+            case "dcBypassTTC":
+                document.getElementById(key).checked = value;
+                toggleHardwiredBypassRow();
+                break;
+            case "vehicleOccupancyHomeKit":
+            case "vehicleArrivingHomeKit":
+            case "vehicleDepartingHomeKit":
                 document.getElementById(key).checked = value;
                 break;
             case "TTClight":
@@ -427,7 +535,13 @@ function setElementsFromStatus(status) {
                 break;
             case "assistDuration":
                 document.getElementById(key).value = value;
-                document.getElementById("assistValue").innerHTML = value;
+                if (value > 0) {
+                    document.getElementById("assistValue").innerHTML = value;
+                    document.getElementById("assistUnits").style.display = "inline";
+                } else {
+                    document.getElementById("assistValue").innerHTML = "Off";
+                    document.getElementById("assistUnits").style.display = "none";
+                }
                 break;
             case "dcDebounceDuration":
                 document.getElementById(key).value = value;
@@ -515,7 +629,8 @@ function setElementsFromStatus(status) {
                 break;
             case "enableNTP":
                 document.getElementById(key).checked = value;
-                document.getElementById("timeZoneTable").style.display = (value) ? "table" : "none";
+                document.getElementById("timeZoneRow").style.opacity = (value) ? 1 : 0.5;
+                document.getElementById("timeZoneInput").disabled = !value;
                 break;
             case "enableIPv6":
                 document.getElementById(key).checked = value;
@@ -548,7 +663,9 @@ function setElementsFromStatus(status) {
                 break;
             case "garageDoorState":
                 document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
-                if (status.ttcActive) {
+                // We have to use global serverStatus rather than local status, as local one only contains values
+                // to be updated... which may not include ttcActive
+                if (serverStatus.ttcActive) {
                     document.getElementById("doorButton").value = "Cancel Close";
                 } else {
                     document.getElementById("doorButton").value = (value == "Closed" || value == "Closing") ? "Open Door" : "Close Door";
@@ -571,7 +688,9 @@ function setElementsFromStatus(status) {
                 }
                 else {
                     document.getElementById(key).style.display = "none";
-                    state = capitalizeFirstLetter(status.garageDoorState ? status.garageDoorState : "Closing");
+                    // We have to use global serverStatus rather than local status, as local one only contains values
+                    // to be updated... which may not include garageDoorState
+                    state = capitalizeFirstLetter(serverStatus.garageDoorState ? serverStatus.garageDoorState : "Closing");
                     document.getElementById("garageDoorState").innerHTML = state;
                     document.getElementById("doorButton").value = (state == "Closed" || state == "Closing") ? "Open Door" : "Close Door";
                 }
@@ -645,7 +764,6 @@ function setElementsFromStatus(status) {
 }
 
 // checkStatus is called once on page load to retrieve status from the server...
-// and setInterval a timer that will refresh the data every 10 seconds
 async function checkStatus() {
     // clean up any awaiting timeouts...
     clearTimeout(checkHeartbeat);
@@ -992,6 +1110,12 @@ async function firmwareUpdate(github = true) {
         if (response.status !== 200) {
             rebootMsg = await response.text();
             console.error(`Firmware upload error: ${rebootMsg}`);
+            if (rebootMsg === "Not Enough Space") {
+                alert(`Firmware is too large for the OTA partition. You may be able to install the firmware by USB serial port, see README.md at https://github.com/${gitUser}/${gitRepo}/blob/main/README.md#upgrade-failures`);
+                showRebootMsg = false;
+                location.href = "/";
+                return;
+            }
             if (confirm(`Firmware upload error: ${rebootMsg} Existing firmware not replaced. Proceed to reboot device? NOTE: Reboot is required to re-enable HomeKit services.`)) {
                 rebootRATGDO(false);
             }
@@ -1181,6 +1305,35 @@ function setMotionTriggers(bitset) {
     //document.getElementById("trOccupancyDuration").style.display = (bitset) ? "table-row" : "none";
 };
 
+function setVehicleSensorOptionState(enabled) {
+    ["vehicleOccupancyHomeKit", "vehicleArrivingHomeKit", "vehicleDepartingHomeKit"].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) {
+            el.disabled = !enabled;
+        }
+    });
+    const row = document.getElementById("vehicleSensorOptions");
+    if (row) {
+        row.style.opacity = enabled ? "1" : "0.5";
+    }
+}
+
+function setVehicleConfigVisibility(show) {
+    const displayValue = show ? "table-row" : "none";
+    document.getElementById("vehicleHomeKitRow").style.display = displayValue;
+    document.getElementById("vehicleSensorOptions").style.display = displayValue;
+    if (show) {
+        setVehicleSensorOptionState(document.getElementById("vehicleHomeKit").checked);
+    }
+    else {
+        setVehicleSensorOptionState(false);
+    }
+}
+
+function handleVehicleHomeKitToggle(checked) {
+    setVehicleSensorOptionState(checked);
+}
+
 async function saveSettings() {
     let TTCseconds = Math.max(parseInt(document.getElementById("TTCseconds").value), 0);
     if (isNaN(TTCseconds)) TTCseconds = 0;
@@ -1231,9 +1384,14 @@ async function saveSettings() {
     let vehicleThreshold = Math.max(Math.min(parseInt(document.getElementById("vehicleThreshold").value), 300), 5);
     if (isNaN(vehicleThreshold)) vehicleThreshold = 0;
     const vehicleHomeKit = (document.getElementById("vehicleHomeKit").checked) ? '1' : '0';
+    const vehicleOccupancyHomeKit = (document.getElementById("vehicleOccupancyHomeKit").checked) ? '1' : '0';
+    const vehicleArrivingHomeKit = (document.getElementById("vehicleArrivingHomeKit").checked) ? '1' : '0';
+    const vehicleDepartingHomeKit = (document.getElementById("vehicleDepartingHomeKit").checked) ? '1' : '0';
     const laserEnabled = (document.getElementById("laserEnabled").checked) ? '1' : '0';
     const laserHomeKit = (document.getElementById("laserHomeKit").checked) ? '1' : '0';
     const dcOpenClose = (document.getElementById("dcOpenClose").checked) ? '1' : '0';
+    const dcBypassTTC = (document.getElementById("dcBypassTTC").checked) ? '1' : '0';
+    const useToggle = (document.getElementById("useToggle").checked) ? '1' : '0';
     const useSWserial = (document.getElementById("useSWserial").checked) ? '1' : '0';
     const obstFromStatus = (document.getElementById("obstFromStatus").checked) ? '1' : '0';
 
@@ -1270,6 +1428,8 @@ async function saveSettings() {
     const list = document.getElementById("timeZoneInput");
     const timeZone = list.options[list.selectedIndex].text + ';' + list.options[list.selectedIndex].value;
     const homespanCLI = (document.getElementById("homespanCLI").checked) ? '1' : '0';
+    const homekitLight = (document.getElementById("homekitLight").checked) ? '1' : '0';
+    const motionHomeKit = (document.getElementById("motionHomeKit").checked) ? '1' : '0';
 
     let dht22Pin = parseInt(document.getElementById("dht22Pin").value);
     if (isNaN(dht22Pin)) dht22Pin = -1;
@@ -1295,9 +1455,14 @@ async function saveSettings() {
         "TTClight", TTClight,
         "vehicleThreshold", vehicleThreshold,
         "vehicleHomeKit", vehicleHomeKit,
+        "vehicleOccupancyHomeKit", vehicleOccupancyHomeKit,
+        "vehicleArrivingHomeKit", vehicleArrivingHomeKit,
+        "vehicleDepartingHomeKit", vehicleDepartingHomeKit,
         "laserEnabled", laserEnabled,
         "laserHomeKit", laserHomeKit,
         "dcOpenClose", dcOpenClose,
+        "dcBypassTTC", dcBypassTTC,
+        "useToggle", useToggle,
         "assistDuration", assistDuration,
         "motionTriggers", motionTriggers,
         "occupancyDuration", occupancyDuration,
@@ -1321,6 +1486,8 @@ async function saveSettings() {
         "homespanCLI", homespanCLI,
         "dht22Pin", dht22Pin,
         "dht22TempFormat", dht22TempFormat,
+        "homekitLight", homekitLight,
+        "motionHomeKit", motionHomeKit,
     );
     if (reboot) {
         countdown(rebootSeconds, "Settings saved, RATGDO device rebooting...&nbsp;");

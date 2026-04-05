@@ -600,38 +600,62 @@ void createMotionAccessories()
 #ifdef RATGDO32_DISCO
 void enable_service_homekit_vehicle(bool enable)
 {
-    if (enable)
-    {
-        if (!vehicle) // using "vehicle" as proxy for all three motion sensors
+    const bool allowOccupancy = enable && userConfig->getVehicleOccupancyHomeKit();
+    const bool allowArriving = enable && userConfig->getVehicleArrivingHomeKit();
+    const bool allowDeparting = enable && userConfig->getVehicleDepartingHomeKit();
+
+    bool databaseChanged = false;
+
+    auto ensureMotionSensor = [&](DEV_Motion *&sensor, uint16_t aid, const char *name, bool shouldExist) {
+        if (shouldExist)
         {
-            // Define Motion Sensor accessory for vehicle arriving
-            new SpanAccessory(HOMEKIT_AID_ARRIVING);
-            new DEV_Info("Arriving");
-            arriving = new DEV_Motion("Arriving");
-            // Define Motion Sensor accessory for vehicle departing
-            new SpanAccessory(HOMEKIT_AID_DEPARTING);
-            new DEV_Info("Departing");
-            departing = new DEV_Motion("Departing");
-
-            // Define Motion Sensor accessory for vehicle occupancy (parked or away)
-            new SpanAccessory(HOMEKIT_AID_VEHICLE);
-            new DEV_Info("Vehicle");
-            vehicle = new DEV_Occupancy();
-
-            homeSpan.updateDatabase();
+            if (!sensor)
+            {
+                new SpanAccessory(aid);
+                new DEV_Info(name);
+                sensor = new DEV_Motion(name);
+                databaseChanged = true;
+            }
         }
-    }
-    else if (vehicle) // using "vehicle" as proxy for all three motion sensors
-    {
-        // Delete the accessories, if they exists
-        ESP_LOGI(TAG, "Deleting HomeKit Motion and Occupancy Accessories for vehicle presense");
-        homeSpan.deleteAccessory(HOMEKIT_AID_VEHICLE);
-        vehicle = nullptr;
-        homeSpan.deleteAccessory(HOMEKIT_AID_ARRIVING);
-        arriving = nullptr;
-        homeSpan.deleteAccessory(HOMEKIT_AID_DEPARTING);
-        departing = nullptr;
+        else if (sensor)
+        {
+            ESP_LOGI(TAG, "Deleting HomeKit Motion Sensor: %s", name);
+            if (homeSpan.deleteAccessory(aid))
+            {
+                sensor = nullptr;
+                databaseChanged = true;
+            }
+        }
+    };
 
+    auto ensureOccupancySensor = [&](DEV_Occupancy *&sensor, uint16_t aid, const char *name, bool shouldExist) {
+        if (shouldExist)
+        {
+            if (!sensor)
+            {
+                new SpanAccessory(aid);
+                new DEV_Info(name);
+                sensor = new DEV_Occupancy();
+                databaseChanged = true;
+            }
+        }
+        else if (sensor)
+        {
+            ESP_LOGI(TAG, "Deleting HomeKit Occupancy Sensor: %s", name);
+            if (homeSpan.deleteAccessory(aid))
+            {
+                sensor = nullptr;
+                databaseChanged = true;
+            }
+        }
+    };
+
+    ensureMotionSensor(arriving, HOMEKIT_AID_ARRIVING, "Arriving", allowArriving);
+    ensureMotionSensor(departing, HOMEKIT_AID_DEPARTING, "Departing", allowDeparting);
+    ensureOccupancySensor(vehicle, HOMEKIT_AID_VEHICLE, "Vehicle", allowOccupancy);
+
+    if (databaseChanged)
+    {
         homeSpan.updateDatabase();
     }
 
@@ -691,6 +715,78 @@ bool enable_service_homekit_room_occupancy(bool enable)
             roomOccupancy = nullptr;
             homeSpan.updateDatabase();
             garage_door.room_occupied = false;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool enable_service_homekit_light(bool enable)
+{
+    // Dry contact (security type 3) cannot control lights
+    if (userConfig->getGDOSecurityType() == 3)
+    {
+        ESP_LOGI(TAG, "Dry contact mode - light control not supported");
+        return false;
+    }
+
+    if (enable)
+    {
+        if (!light)
+        {
+            // Define the Light accessory...
+            ESP_LOGI(TAG, "Creating HomeKit Light Service");
+            new SpanAccessory(HOMEKIT_AID_LIGHT_BULB);
+            new DEV_Info("Light");
+            light = new DEV_Light();
+            homeSpan.updateDatabase();
+            return true;
+        }
+    }
+    else if (light)
+    {
+        // Delete the accessory, if it exists
+        ESP_LOGI(TAG, "Deleting HomeKit Light Service");
+        if (homeSpan.deleteAccessory(HOMEKIT_AID_LIGHT_BULB))
+        {
+            light = nullptr;
+            homeSpan.updateDatabase();
+            return true;
+        }
+    }
+    return false;
+}
+
+bool enable_service_homekit_motion_sensor(bool enable)
+{
+    if (enable)
+    {
+        if (!motion)
+        {
+            // Only create if motion is possible (sensor detected OR triggers configured)
+            if (garage_door.has_motion_sensor || userConfig->getMotionTriggers() != 0)
+            {
+                ESP_LOGI(TAG, "Creating HomeKit Motion Sensor Service");
+                createMotionAccessories();
+                homeSpan.updateDatabase();
+                return true;
+            }
+            else
+            {
+                ESP_LOGI(TAG, "Cannot create motion service - no motion sensor and no triggers configured");
+            }
+        }
+    }
+    else if (motion)
+    {
+        // Delete the accessory, if it exists
+        ESP_LOGI(TAG, "Deleting HomeKit Motion Sensor Service");
+        // First disable room occupancy if it exists (depends on motion)
+        enable_service_homekit_room_occupancy(false);
+        if (homeSpan.deleteAccessory(HOMEKIT_AID_MOTION))
+        {
+            motion = nullptr;
+            homeSpan.updateDatabase();
             return true;
         }
     }
@@ -766,21 +862,36 @@ void setup_homekit()
     // Dry contact (security type 3) cannot control lights
     if (userConfig->getGDOSecurityType() != 3)
     {
-        // Define the Light accessory...
-        new SpanAccessory(HOMEKIT_AID_LIGHT_BULB);
-        new DEV_Info("Light");
-        light = new DEV_Light();
+        // Only create Light accessory if enabled in settings (default: true)
+        if (userConfig->getLightHomeKit())
+        {
+            // Define the Light accessory...
+            new SpanAccessory(HOMEKIT_AID_LIGHT_BULB);
+            new DEV_Info("Light");
+            light = new DEV_Light();
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Light HomeKit accessory disabled in settings");
+        }
     }
     else
     {
         ESP_LOGI(TAG, "Dry contact mode. Disabling light switch service");
     }
 
-    // only create motion if we know we have motion sensor(s)
+    // only create motion if we know we have motion sensor(s) AND it's enabled in settings
     garage_door.has_motion_sensor = (bool)read_door_int(nvram_has_motion);
     if (garage_door.has_motion_sensor || userConfig->getMotionTriggers() != 0)
     {
-        createMotionAccessories();
+        if (userConfig->getMotionHomeKit())
+        {
+            createMotionAccessories();
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Motion HomeKit accessory disabled in settings");
+        }
     }
     else
     {
@@ -889,7 +1000,7 @@ DEV_GarageDoor::DEV_GarageDoor() : Service::GarageDoorOpener()
 
 boolean DEV_GarageDoor::update()
 {
-    ESP_LOGI(TAG, "Garage Door Characteristics Update, door target: %d", target->getNewVal());
+    ESP_LOGI(TAG, "Garage Door Characteristics Update, door target: %s", DOOR_STATE(target->getNewVal()));
     GarageDoorCurrentState state = (target->getNewVal() == target->OPEN) ? open_door() : close_door();
     obstruction->setVal(false);
     current->setVal(state);
@@ -909,17 +1020,17 @@ void DEV_GarageDoor::loop()
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
         if (e.c == current)
-            ESP_LOGI(TAG, "Set current door state: %s", DOOR_STATE(e.value.u));
+            ESP_LOGD(TAG, "Set current door state: %s", DOOR_STATE(e.value.u));
         else if (e.c == target)
-            ESP_LOGI(TAG, "Set target door state: %s", DOOR_STATE(e.value.u));
+            ESP_LOGD(TAG, "Set target door state: %s", DOOR_STATE(e.value.u));
         else if (e.c == obstruction)
-            ESP_LOGI(TAG, "Set obstruction: %s", e.value.u ? "Obstructed" : "Clear");
+            ESP_LOGD(TAG, "Set obstruction: %s", e.value.u ? "Obstructed" : "Clear");
         else if (e.c == lockCurrent)
-            ESP_LOGI(TAG, "Set current lock state: %s", LOCK_STATE(e.value.u));
+            ESP_LOGD(TAG, "Set current lock state: %s", LOCK_STATE(e.value.u));
         else if (e.c == lockTarget)
-            ESP_LOGI(TAG, "Set target lock state: %s", LOCK_STATE(e.value.u));
+            ESP_LOGD(TAG, "Set target lock state: %s", LOCK_STATE(e.value.u));
         else
-            ESP_LOGI(TAG, "Set Unknown: %d", e.value.u);
+            ESP_LOGD(TAG, "Set Unknown: %d", e.value.u);
         e.c->setVal(e.value.u);
     }
 }
@@ -969,9 +1080,9 @@ void DEV_Light::loop()
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
         if (this->type == Light_t::GDO_LIGHT)
-            ESP_LOGI(TAG, "Light has turned %s", e.value.b ? "on" : "off");
+            ESP_LOGD(TAG, "Light has turned %s", e.value.b ? "on" : "off");
         else if (this->type == Light_t::ASSIST_LASER)
-            ESP_LOGI(TAG, "Parking assist laster has turned %s", e.value.b ? "on" : "off");
+            ESP_LOGD(TAG, "Parking assist laser has turned %s", e.value.b ? "on" : "off");
         DEV_Light::on->setVal(e.value.b);
     }
 }
@@ -993,7 +1104,7 @@ void DEV_Motion::loop()
     {
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
-        ESP_LOGI(TAG, "%s %s", name, e.value.b ? "detected" : "reset");
+        ESP_LOGD(TAG, "%s %s", name, e.value.b ? "detected" : "reset");
         DEV_Motion::motion->setVal(e.value.b);
     }
 }
@@ -1014,7 +1125,7 @@ void DEV_Occupancy::loop()
     {
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
-        ESP_LOGI(TAG, "%s occupancy %s", (this == vehicle) ? "Vehicle" : "Room", e.value.b ? "detected" : "reset");
+        ESP_LOGD(TAG, "%s occupancy %s", (this == vehicle) ? "Vehicle" : "Room", e.value.b ? "detected" : "reset");
         DEV_Occupancy::occupied->setVal(e.value.b);
     }
 }
@@ -1269,12 +1380,15 @@ void notify_homekit_light(bool state)
 void enable_service_homekit_motion(bool reboot)
 {
 #ifdef ESP32
-    // only create if not already created
+    // only create if not already created AND motion accessory is enabled in settings
     if (!garage_door.has_motion_sensor)
     {
         write_door_int(nvram_has_motion, 1);
         garage_door.has_motion_sensor = true;
-        createMotionAccessories();
+        if (userConfig->getMotionHomeKit())
+        {
+            createMotionAccessories();
+        }
         if (reboot)
         {
             sync_and_restart();

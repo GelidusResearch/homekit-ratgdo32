@@ -788,6 +788,7 @@ public:
         Status = 0x081,
         Obst1 = 0x084, // sent when an obstruction happens?
         Obst2 = 0x085, // sent when an obstruction happens?
+        GetBattery = 0x09c,
         Battery = 0x09d,
         Pair3 = 0x0a0,
         Pair3Resp = 0x0a1,
@@ -802,9 +803,10 @@ public:
         PingResp = 0x393,
         Pair2 = 0x400,
         Pair2Resp = 0x401,
-        SetTtc = 0x402,    // ttc_in_seconds = (byte1<<8)+byte2
-        CancelTtc = 0x408, // ?
-        UpdateTtc = 0x40a, // Time to close
+        SetTtc = 0x402,     // ttc_in_seconds = (byte1<<8)+byte2
+        CancelTtc = 0x408,  // 0x04 = Hold, 0x05 = Cancel
+        Unknown409 = 0x409, // Sometimes sent by a wall panel when it activates
+        UpdateTtc = 0x40a,  // Time to close
         GetOpenings = 0x48b,
         Openings = 0x48c, // openings = (byte1<<8)+byte2
     };
@@ -831,6 +833,8 @@ public:
             return "Obst2";
         case PacketCommandValue::Battery:
             return "Battery";
+        case PacketCommandValue::GetBattery:
+            return "GetBattery";
         case PacketCommandValue::Pair3:
             return "Pair3";
         case PacketCommandValue::Pair3Resp:
@@ -867,6 +871,8 @@ public:
             return "GetOpenings";
         case PacketCommandValue::Openings:
             return "Openings";
+        case PacketCommandValue::Unknown409:
+            return "Unknown409";
         }
         return "Invalid PacketCommandValue";
     }
@@ -883,6 +889,8 @@ public:
             return PacketCommandValue::Obst1;
         case PacketCommandValue::Obst2:
             return PacketCommandValue::Obst2;
+        case PacketCommandValue::GetBattery:
+            return PacketCommandValue::GetBattery;
         case PacketCommandValue::Battery:
             return PacketCommandValue::Battery;
         case PacketCommandValue::Pair3:
@@ -921,6 +929,8 @@ public:
             return PacketCommandValue::GetOpenings;
         case PacketCommandValue::Openings:
             return PacketCommandValue::Openings;
+        case PacketCommandValue::Unknown409:
+            return PacketCommandValue::Unknown409;
         default:
             return PacketCommandValue::Unknown;
         }
@@ -968,6 +978,7 @@ struct Packet
         {
             m_data.type = PacketDataType::Unknown;
             m_data.value.unknown = UnknownCommandData(pkt_data);
+            m_unknown_cmd = cmd; // save the original cmd that was unknown
             break;
         }
 
@@ -1055,11 +1066,19 @@ struct Packet
             break;
         }
 
+        case PacketCommand::GetOpenings:
+        case PacketCommand::GetBattery:
+        {
+            // These packets have some data in them (maybe), but details not known
+            m_data.type = PacketDataType::Unknown;
+            m_data.value.unknown = UnknownCommandData(pkt_data);
+            break;
+        }
+
         case PacketCommand::MotorOn:
         case PacketCommand::Motion:
         case PacketCommand::Obst1:
         case PacketCommand::Obst2:
-        case PacketCommand::GetOpenings:
         {
             // These packets come in with no data, so notification only.
             m_data.type = PacketDataType::NoData;
@@ -1073,6 +1092,7 @@ struct Packet
         case PacketCommand::Pair3:
         case PacketCommand::Ping:
         case PacketCommand::PingResp:
+        case PacketCommand::Unknown409:
         {
             // These packets have some data in them (maybe), but details not known
             m_data.type = PacketDataType::Unknown;
@@ -1083,7 +1103,7 @@ struct Packet
 
         char buf[128];
         m_data.to_string(buf, sizeof(buf));
-        ESP_LOGD(TAG, "DECODED  %08lX %016" PRIX64 " %08lX (%s - %s)", pkt_rolling, pkt_remote_id, pkt_data, PacketCommand::to_string(m_pkt_cmd), buf);
+        ESP_LOGV(TAG, "DECODED  %08lX %016" PRIX64 " %08lX (%s - %s)", pkt_rolling, pkt_remote_id, pkt_data, PacketCommand::to_string(m_pkt_cmd), buf);
     }
 
     int8_t encode(uint32_t rolling, uint8_t *out_pktbuf)
@@ -1162,6 +1182,7 @@ struct Packet
         case PacketCommand::Motion:
         case PacketCommand::Obst1:
         case PacketCommand::Obst2:
+        case PacketCommand::GetBattery:
         case PacketCommand::GetOpenings:
         case PacketCommand::Pair2:
         case PacketCommand::Pair2Resp:
@@ -1171,6 +1192,7 @@ struct Packet
         case PacketCommand::Learn1:
         case PacketCommand::Ping:
         case PacketCommand::PingResp:
+        case PacketCommand::Unknown409:
             // no data or unimplemented
             break;
         }
@@ -1179,7 +1201,7 @@ struct Packet
 
         char buf[128];
         m_data.to_string(buf, sizeof(buf));
-        ESP_LOGD(TAG, "ENCODING %08lX %016" PRIX64 " %08lX (%s - %s)", m_rolling, fixed, pkt_data, PacketCommand::to_string(m_pkt_cmd), buf);
+        ESP_LOGV(TAG, "ENCODING %08lX %016" PRIX64 " %08lX (%s - %s)", m_rolling, fixed, pkt_data, PacketCommand::to_string(m_pkt_cmd), buf);
 
         return encode_wireline(m_rolling, fixed, pkt_data, out_pktbuf);
     }
@@ -1195,10 +1217,12 @@ struct Packet
     {
         char buf[128];
         m_data.to_string(buf, sizeof(buf));
-        ESP_LOGI(TAG, "PACKET(0x%lX @ 0x%lX) %s - %s", m_remote_id, m_rolling, PacketCommand::to_string(m_pkt_cmd), buf);
+        ESP_LOGI(TAG, "PACKET(0x%03X from 0x%lX @ 0x%lX) %s - %s", m_pkt_cmd == PacketCommand::Unknown ? m_unknown_cmd : m_pkt_cmd, m_remote_id, m_rolling,
+                 PacketCommand::to_string(m_pkt_cmd), buf);
     };
 
     PacketCommand m_pkt_cmd;
+    uint16_t m_unknown_cmd;
     PacketData m_data;
     uint32_t m_remote_id; // 3 bytes
     uint32_t m_rolling;

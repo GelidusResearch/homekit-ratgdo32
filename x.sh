@@ -9,16 +9,21 @@ do
             ;;
         monitor) pio device monitor -e ratgdo_esp32dev
             ;;
-        run) pio run -e ratgdo_esp32dev $VERBOSE
+        run) pio run -e ratgdo_esp32dev -e ratgdo_esp32dev_rev1 $VERBOSE
             ;;
         test) pio test -e native $VERBOSE
             ;;
         release)
             git tag $2
             ./x.sh run
-            cp .pio/build/ratgdo_esp32dev/firmware.bin docs/firmware/homekit-grgdo1-$(git describe --tag).firmware.bin
-            cp .pio/build/ratgdo_esp32dev/bootloader.bin docs/firmware/homekit-grgdo1-$(git describe --tag).bootloader.bin
-            cp .pio/build/ratgdo_esp32dev/partitions.bin docs/firmware/homekit-grgdo1-$(git describe --tag).partitions.bin
+            # Package Rev2 (default dev)
+            cp .pio/build/ratgdo_esp32dev/firmware.bin docs/firmware/homekit-grgdo1-rev2-$(git describe --tag).firmware.bin
+            cp .pio/build/ratgdo_esp32dev/bootloader.bin docs/firmware/homekit-grgdo1-rev2-$(git describe --tag).bootloader.bin
+            cp .pio/build/ratgdo_esp32dev/partitions.bin docs/firmware/homekit-grgdo1-rev2-$(git describe --tag).partitions.bin
+            # Package Rev1
+            cp .pio/build/ratgdo_esp32dev_rev1/firmware.bin docs/firmware/homekit-grgdo1-rev1-$(git describe --tag).firmware.bin
+            cp .pio/build/ratgdo_esp32dev_rev1/bootloader.bin docs/firmware/homekit-grgdo1-rev1-$(git describe --tag).bootloader.bin
+            cp .pio/build/ratgdo_esp32dev_rev1/partitions.bin docs/firmware/homekit-grgdo1-rev1-$(git describe --tag).partitions.bin
             vi docs/manifest.json
             git add docs
             git commit -m "Release $2"
