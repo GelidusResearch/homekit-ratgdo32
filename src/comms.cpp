@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-26 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -361,6 +361,11 @@ enum secplus1Codes : uint8_t
 
     Unknown = 0xFF // (when rx fails parity test)
 };
+static bool pendingLightOn = false;
+static bool pendingLightOff = false;
+static bool pendingLockOn = false;
+static bool pendingLockOff = false;
+static bool pendingDoorCommand = false;
 
 #define SEC1_CMD(s) (s == secplus1Codes::DoorButtonPress)      ? "door press"    \
                     : (s == secplus1Codes::DoorButtonRelease)  ? "door release"  \
@@ -953,6 +958,7 @@ void update_door_state(GarageDoorCurrentState current_state)
     _millis_t now = _millis();
 
     GarageDoorTargetState target_state = garage_door.target_state;
+    pendingDoorCommand = false;
 
     // Determine target state
     switch (current_state)
@@ -1399,6 +1405,8 @@ void sec1_process_message(uint8_t key, uint8_t value = 0xFF)
             ESP_LOGI(TAG, "Light: %s (%s)", lightState ? "On" : "Off", timeString());
             lastLightState = lightState;
             notify_homekit_light((bool)lightState);
+            // Force update of light state in any listening client
+            last_reported_garage_door.light = !garage_door.light;
             if (motionTriggers.bit.lightKey)
             {
                 notify_homekit_motion(true);
@@ -1425,6 +1433,8 @@ void sec1_process_message(uint8_t key, uint8_t value = 0xFF)
             }
             notify_homekit_target_lock(garage_door.target_lock);
             notify_homekit_current_lock(garage_door.current_lock);
+            // Force update of lock state in any listening client
+            last_reported_garage_door.current_lock = (LockCurrentState)0xFF;
             if (motionTriggers.bit.lockKey)
             {
                 notify_homekit_motion(true);
@@ -1764,6 +1774,8 @@ void comms_loop_sec2()
                 ESP_LOGD(TAG, "Remotes lock: %s (%s)", LOCK_STATE(current_lock), timeString());
                 notify_homekit_target_lock(target_lock);
                 notify_homekit_current_lock(current_lock);
+                // Force update of lock state in any listening client
+                last_reported_garage_door.current_lock = (LockCurrentState)0xFF;
             }
 
             // Handle obstruction from status packet if pin-based detection not available
@@ -2420,6 +2432,12 @@ bool process_PacketAction(PacketAction &pkt_ac)
 
 void door_command(DoorAction action)
 {
+    if (pendingDoorCommand)
+    {
+        ESP_LOGW(TAG, "Pending door command exists, dropping new command");
+        return;
+    }
+
     if (doorControlType != 3)
     {
         // SECURITY1.0/2.0 commands
@@ -2459,6 +2477,7 @@ void door_command(DoorAction action)
             ESP_LOGE(TAG, "packet queue full, dropping door command release pkt");
             return;
         }
+        pendingDoorCommand = true;
 
         // if sec+1.0, repeat the release
         if (doorControlType == 1)
@@ -2520,6 +2539,7 @@ void door_command_close()
                                        // If this timer fires (was not cancelled when we get notification that door has stopped) then
                                        // we probably missed a status mesage, assume it's closed.
                                        ESP_LOGW(TAG, "Door did not close in expected time, assuming it is closed");
+                                       pendingDoorCommand = false;
                                        notify_homekit_current_door_state_change(GarageDoorCurrentState::CURR_CLOSED);
                                        notify_homekit_target_door_state_change(GarageDoorTargetState::TGT_CLOSED);
                                        send_get_status(); // query in case we're wrong and it's stopped (Sec+2.0)
@@ -2532,6 +2552,7 @@ void door_command_close()
                                 // If this timer fires (was not cancelled when we get notification that door is closing) then
                                 // it is likely that there is an error and door did not move from its open state.
                                 checkDoorCompleted.detach();
+                                pendingDoorCommand = false;
                                 ESP_LOGE(TAG, "Door is supposed to be closing but is not.  Current state: %s", DOOR_STATE(garage_door.current_state));
                                 notify_homekit_current_door_state_change(GarageDoorCurrentState::CURR_OPEN);
                                 notify_homekit_target_door_state_change(GarageDoorTargetState::TGT_OPEN); });
@@ -2560,6 +2581,7 @@ void door_command_open()
                                        // If this timer fires (was not cancelled when we get notification that door has stopped) then
                                        // we probably missed a status mesage, assume it's open.
                                        ESP_LOGW(TAG, "Door did not open in expected time, assuming it is open");
+                                       pendingDoorCommand = false;
                                        notify_homekit_current_door_state_change(GarageDoorCurrentState::CURR_OPEN);
                                        notify_homekit_target_door_state_change(GarageDoorTargetState::TGT_OPEN);
                                        send_get_status(); // query in case we're wrong and it's stopped (Sec+2.0)
@@ -2572,6 +2594,7 @@ void door_command_open()
                                 // If this timer fires (was not cancelled when we get notification that door is opening) then
                                 // it is likely that there is an error and door did not move from its closed state.
                                 checkDoorCompleted.detach();
+                                pendingDoorCommand = false;
                                 ESP_LOGE(TAG, "Door is supposed to be opening but is not.  Current state: %s", DOOR_STATE(garage_door.current_state));
                                 notify_homekit_current_door_state_change(GarageDoorCurrentState::CURR_CLOSED);
                                 notify_homekit_target_door_state_change(GarageDoorTargetState::TGT_CLOSED); });
@@ -2595,12 +2618,12 @@ GarageDoorCurrentState open_door()
     }
 
     // safety
-    if (garage_door.current_state == GarageDoorCurrentState::CURR_OPEN)
+    if (garage_door.current_state == GarageDoorCurrentState::CURR_OPEN || garage_door.current_state == GarageDoorCurrentState::CURR_OPENING)
     {
-        ESP_LOGI(TAG, "Door already open; ignored request");
+        ESP_LOGI(TAG, "Door already %s; ignored request", DOOR_STATE(garage_door.current_state));
         // Reset last reported to we will update browser with actual state.
         last_reported_garage_door.current_state = (GarageDoorCurrentState)0xFF;
-        return GarageDoorCurrentState::CURR_OPEN;
+        return garage_door.current_state;
     }
 
     if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSING)
@@ -2719,12 +2742,12 @@ void delayFnCall(uint32_t ms, void (*callback)())
 
 GarageDoorCurrentState close_door(bool bypass_ttc)
 {
-    if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSED)
+    if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSED || garage_door.current_state == GarageDoorCurrentState::CURR_CLOSING)
     {
-        ESP_LOGI(TAG, "Door already closed; ignored request");
+        ESP_LOGI(TAG, "Door already %s; ignored request", DOOR_STATE(garage_door.current_state));
         // Reset last reported to we will update browser with actual state.
         last_reported_garage_door.current_state = (GarageDoorCurrentState)0xFF;
-        return GarageDoorCurrentState::CURR_CLOSED;
+        return garage_door.current_state;
     }
 
     cancel_builtin_TTC_countdown();

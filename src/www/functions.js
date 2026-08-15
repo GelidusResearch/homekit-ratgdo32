@@ -147,7 +147,7 @@ function toggleDCOpenClose(radio) {
     document.getElementById("dcOpenClose").disabled = (value == 3);
     document.getElementById("obstFromStatus").disabled = (value == 3);
     document.getElementById("useToggle").disabled = (value != 2);
-    document.getElementById("homekitLight").disabled = (value == 3);
+    document.getElementById("lightHomeKit").disabled = (value == 3);
     document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
     document.getElementById("dcDebounceDuration").disabled = (value != 3);
     document.getElementById("motionMotion").disabled = (value != 2);
@@ -183,8 +183,11 @@ function toggleStaticIP() {
 
 // Show or hide the syslog IP field
 function toggleTimeZone() {
-    document.getElementById("timeZoneRow").style.opacity = (this.event.target.checked) ? 1 : 0.5;
-    document.getElementById("timeZoneInput").disabled = !this.event.target.checked;
+    const enabled = this.event.target.checked;
+    document.getElementById("ntpServerRow").style.opacity = enabled ? 1 : 0.5;
+    document.getElementById("ntpServer").disabled = !enabled;
+    document.getElementById("timeZoneRow").style.opacity = enabled ? 1 : 0.5;
+    document.getElementById("timeZoneInput").disabled = !enabled;
     // called for both checked and unchecked... to reset selection if necessary.
     loadTZinfo(document.getElementById("timeZoneInput"));
 }
@@ -403,7 +406,7 @@ function setElementsFromStatus(status) {
                 document.getElementById("dcOpenClose").disabled = (value == 3);
                 document.getElementById("obstFromStatus").disabled = (value == 3);
                 document.getElementById("useToggle").disabled = (value != 2);
-                document.getElementById("homekitLight").disabled = (value == 3);
+                document.getElementById("lightHomeKit").disabled = (value == 3);
                 document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
                 document.getElementById("dcDebounceDuration").disabled = (value != 3);
                 document.getElementById("motionMotion").disabled = (value != 2);
@@ -498,7 +501,7 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).checked = value;
                 document.getElementById("homespanSetting").style.display = "table-row";
                 break;
-            case "homekitLight":
+            case "lightHomeKit":
                 document.getElementById(key).checked = value;
                 document.getElementById("homekitLightRow").style.display = "table-row";
                 break;
@@ -629,8 +632,13 @@ function setElementsFromStatus(status) {
                 break;
             case "enableNTP":
                 document.getElementById(key).checked = value;
+                document.getElementById("ntpServerRow").style.opacity = (value) ? 1 : 0.5;
+                document.getElementById("ntpServer").disabled = !value;
                 document.getElementById("timeZoneRow").style.opacity = (value) ? 1 : 0.5;
                 document.getElementById("timeZoneInput").disabled = !value;
+                break;
+            case "ntpServer":
+                document.getElementById(key).placeholder = value;
                 break;
             case "enableIPv6":
                 document.getElementById(key).checked = value;
@@ -794,8 +802,13 @@ async function checkStatus() {
                 }
             })
             .then((text) => {
-                serverStatus = JSON.parse(text);
-                console.log(serverStatus);
+                try {
+                    serverStatus = JSON.parse(text);
+                    console.log(serverStatus);
+                } catch (error) {
+                    console.error(`Error parsing status JSON: ${error}`);
+                    console.log(`Status text: ${text}`);
+                }
                 serverStatus = { ...serverStatus, ...setGDOcmds }; // merge-in setGDO command constants
                 // Add letter 'v' to front of returned firmware version.
                 // Hack because firmware uses v0.0.0 and 0.0.0 for different purposes.
@@ -1424,11 +1437,13 @@ async function saveSettings() {
     let nameserverIP = document.getElementById("IPnameserver").value.substring(0, 15);
     if (nameserverIP.length == 0) nameserverIP = serverStatus.nameserverIP;
     const enableNTP = (document.getElementById("enableNTP").checked) ? '1' : '0';
+    let ntpServer = document.getElementById("ntpServer").value.substring(0, 63).trim();
+    if (ntpServer.length == 0) ntpServer = serverStatus.ntpServer;
     const enableIPv6 = (document.getElementById("enableIPv6").checked) ? '1' : '0';
     const list = document.getElementById("timeZoneInput");
     const timeZone = list.options[list.selectedIndex].text + ';' + list.options[list.selectedIndex].value;
     const homespanCLI = (document.getElementById("homespanCLI").checked) ? '1' : '0';
-    const homekitLight = (document.getElementById("homekitLight").checked) ? '1' : '0';
+    const lightHomeKit = (document.getElementById("lightHomeKit").checked) ? '1' : '0';
     const motionHomeKit = (document.getElementById("motionHomeKit").checked) ? '1' : '0';
 
     let dht22Pin = parseInt(document.getElementById("dht22Pin").value);
@@ -1473,6 +1488,7 @@ async function saveSettings() {
         "gatewayIP", gatewayIP,
         "nameserverIP", nameserverIP,
         "enableNTP", enableNTP,
+        "ntpServer", ntpServer,
         "enableIPv6", enableIPv6,
         "timeZone", timeZone,
         "syslogEn", syslogEn,
@@ -1486,7 +1502,7 @@ async function saveSettings() {
         "homespanCLI", homespanCLI,
         "dht22Pin", dht22Pin,
         "dht22TempFormat", dht22TempFormat,
-        "homekitLight", homekitLight,
+        "lightHomeKit", lightHomeKit,
         "motionHomeKit", motionHomeKit,
     );
     if (reboot) {
