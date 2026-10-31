@@ -1,6 +1,6 @@
 # Focused issue 19 candidate
 
-This branch is unreleased and has not been flashed or validated on hardware. Its embedded version is `1.4.5-focused`, distinct from published images. It does not establish the complete freeze cause.
+This branch is a contributor test candidate and has not been flashed or validated on hardware. Its embedded version is `1.4.7-focused`, newer than the previous 1.4.6 test images. It does not establish the complete freeze cause. The version update changes labels only, with no firmware logic changes.
 
 ## Source and scope
 
@@ -20,6 +20,6 @@ SSE timer changes `1ddd56a` and six-second unconnected-registration expiry `0aa2
 
 ## Remaining gates
 
-Local checks, both target builds and matched artifact hashes are recorded by exact source commit under `Downloads/GRGDO1-Focused-Candidate`. No CI result is claimed here. This candidate must not be published as a release or installer update.
+Local checks, both target builds and matched artifact hashes are recorded by exact source commit under `Downloads/GRGDO1-Focused-Candidate`. The 1.4.7-focused images require fresh build and artifact records for their exact commit. This candidate remains a test build, not an official Gelidus release or installer update.
 
 Before promotion, establish live HomeKit/pairing/OTA behavior and sustained recovery on both revisions. Rev2 mDNS allocation errors still need internal byte-addressable free heap, largest block and failure evidence. Broad heap totals, successful builds and log-page recovery cannot establish that the original freeze is fixed.

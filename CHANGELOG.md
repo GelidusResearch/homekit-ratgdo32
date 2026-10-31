@@ -4,7 +4,9 @@
 
 All notable changes to `homekit-ratgdo32` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
-## v1.4.5 (unreleased) - GRGDO1 reliability candidate
+## v1.4.7 (unreleased) - GRGDO1 focused test candidate
+
+* Identify these test images as `1.4.7-focused`, newer than the previous 1.4.6 test images. Firmware logic is unchanged by this version update.
 
 * Remove temporary SSE frame allocations. Send borrowed spans in one nonblocking ESP32 operation and preserve ESP8266 flushing behavior.
 * Prevent logger/core lock deadlocks when lwIP reports errors: core-held callers never wait for the logger mutex or send SSE/syslog traffic back through lwIP.
