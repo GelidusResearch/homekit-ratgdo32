@@ -14,7 +14,7 @@ SSE timer changes `1ddd56a` and six-second unconnected-registration expiry `0aa2
 
 ## Dependencies and resources
 
-- Platform stays at the 1.4.5 baseline, pioarduino `55.03.311`. This differs from 1.4.6's `55.03.312` and requires fresh hardware validation.
+- Platform stays at the released 1.4.6 SDK, pioarduino `55.03.312` / official Arduino 3.3.12, without the custom WebServer allocation override. Keeping the SDK avoids an additional downgrade variable while isolating application changes. An initial 3.3.11 build was stopped before completion; its log is preserved separately and is not validation evidence.
 - HomeSpan is official 2.1.8, exact `107ffc07f4455754ea89068d8cf2e992de3583e6`. Experimental input/output transport patches are deferred. Native reproductions established mechanisms, but no Apple-client capture ties them to issue 19. Removing custom input reassembly changes retained-buffer behavior; this is not presented as the cause or cure of memory pressure.
 - Optional diagnostic build environments are removed. Existing disabled diagnostic source remains available. Ordinary builds add no diagnostic tasks, queues or network collector.
 
