@@ -4,6 +4,12 @@
 
 All notable changes to `homekit-ratgdo32` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
+## v1.4.8 (unreleased)
+
+* Load saved logs without waiting for the live event stream to connect.
+* Handle log-page request failures and ignore responses from an older reload.
+* Report free, minimum and largest-block byte-addressable internal heap in `status.json`.
+
 ## v1.4.7 (unreleased) - GRGDO1 focused test candidate
 
 * Identify these test images as `1.4.7`, newer than the previous 1.4.6 test images. Firmware logic is unchanged by this version update.
