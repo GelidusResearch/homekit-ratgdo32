@@ -233,13 +233,15 @@ void load_all_config_settings()
     ESP_LOGI(TAG, "   nameserverIP:        %s", userConfig->getNameserverIP());
     ESP_LOGI(TAG, "   wwwPWrequired:       %s", userConfig->getPasswordRequired() ? "true" : "false");
     ESP_LOGI(TAG, "   wwwUsername:         %s", userConfig->getwwwUsername());
-    ESP_LOGI(TAG, "   wwwCredentials:      %s", userConfig->getwwwCredentials());
+    // Do not log credentials as it is a security exposure
+    // ESP_LOGI(TAG, "   wwwCredentials:      %s", userConfig->getwwwCredentials());
     ESP_LOGI(TAG, "   GDOSecurityType:     %d", userConfig->getGDOSecurityType());
     ESP_LOGI(TAG, "   TTCseconds:          %d", userConfig->getTTCseconds());
     ESP_LOGI(TAG, "   rebootSeconds:       %d", userConfig->getRebootSeconds());
     ESP_LOGI(TAG, "   LEDidle:             %d", userConfig->getLEDidle());
     ESP_LOGI(TAG, "   motionTriggers:      %d", userConfig->getMotionTriggers());
     ESP_LOGI(TAG, "   obstFromStatus:      %s", userConfig->getObstFromStatus() ? "true" : "false");
+    ESP_LOGI(TAG, "   wpDisconnectOnTx:    %s", userConfig->getWpDisconnectOnTx() ? "true" : "false");
     ESP_LOGI(TAG, "   enableNTP:           %s", userConfig->getEnableNTP() ? "true" : "false");
     ESP_LOGI(TAG, "   doorUpdateAt:        %d (%s)", userConfig->getDoorUpdateAt(), timeString(userConfig->getDoorUpdateAt()));
     ESP_LOGI(TAG, "   doorOpenAt:          %d (%s)", userConfig->getDoorOpenAt(), timeString(userConfig->getDoorOpenAt()));
@@ -259,6 +261,7 @@ void load_all_config_settings()
     ESP_LOGI(TAG, "     vehicleDeparting:  %s", userConfig->getVehicleDepartingHomeKit() ? "true" : "false");
     ESP_LOGI(TAG, "   laserEnabled:        %s", userConfig->getLaserEnabled() ? "true" : "false");
     ESP_LOGI(TAG, "   laserHomeKit:        %s", userConfig->getLaserHomeKit() ? "true" : "false");
+    ESP_LOGI(TAG, "   laserOnDoorOpen:     %s", userConfig->getLaserOnDoorOpen() ? "true" : "false");
     ESP_LOGI(TAG, "   assistDuration:      %d", userConfig->getAssistDuration());
 #endif
 #ifndef ESP8266
@@ -279,20 +282,8 @@ void load_all_config_settings()
         sntp_set_sync_interval(SNTP_SYNC_INTERVAL);
 #endif
         ESP_LOGI(TAG, "Timezone: %s", userConfig->getTimeZone());
-        std::string tz = userConfig->getTimeZone();
-        size_t pos = tz.find(';');
-        if (pos != std::string::npos)
-        {
-            // semicolon may separate continent/city from posix TZ string
-            ESP_LOGI(TAG, "Set timezone: %s", tz.substr(pos + 1).c_str());
-            configTzTime(tz.substr(pos + 1).c_str(), NTP_SERVER);
-        }
-        else
-        {
-            // if no semicolon then no POSIX code, so use UTC
-            ESP_LOGI(TAG, "Set timezone: UTC0");
-            configTzTime("UTC0", NTP_SERVER);
-        }
+        ESP_LOGI(TAG, "NTP Server: %s", userConfig->getNTPServer());
+        applyTimezoneWithNTP(userConfig->getNTPServer());
     }
 }
 

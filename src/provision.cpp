@@ -35,6 +35,7 @@
 static const char *TAG = "ratgdo-improv";
 
 static bool improv_setup_done = false;
+static bool serial_log_suppressed_before_i2c = false;
 
 #define MAX_ATTEMPTS_WIFI_CONNECTION 20
 
@@ -51,6 +52,8 @@ void blink_led(int d, int times)
 
 void setup_improv()
 {
+    if (!serialConsole.isEnabled())
+        return;
 #ifdef USE_HOMESPAN
     ESP_LOGI(TAG, "Enable Improv for WiFi provisioning. Disable HomeSpan serial logging and CLI. Return to HomeSpan CLI with command 'c' or 'C'");
     // This is necessary so as not to interfere with Improv use of serial port
@@ -67,6 +70,8 @@ void setup_improv()
 void disable_improv()
 {
     improv_setup_done = false;
+    if (!serialConsole.isEnabled())
+        return;
     suppressSerialLog = false;
 #ifdef USE_HOMESPAN
     ESP_LOGI(TAG, "Enable HomeSpan logging and serial CLI. Return to RATGDO CLI with command '@c' or '@C'");
@@ -74,6 +79,31 @@ void disable_improv()
     homeSpan.setSerialInputDisable(false);
 #endif
     return;
+}
+
+void release_serial_console_for_i2c()
+{
+    improv_setup_done = false;
+    serial_log_suppressed_before_i2c = suppressSerialLog;
+#ifdef USE_HOMESPAN
+    homeSpan.setSerialInputDisable(true);
+    homeSpan.setLogLevel(-1);
+#endif
+    ratgdoLogger->disableSerialConsole();
+    serialConsole.releaseForI2C(Serial);
+}
+
+void restore_serial_console_after_i2c()
+{
+    // Only call after Wire.end() has relinquished the shared GPIO1/3.
+    serialConsole.resumeAfterI2C(Serial);
+    suppressSerialLog = serial_log_suppressed_before_i2c;
+#ifdef USE_HOMESPAN
+    if (userConfig->getEnableHomeSpanCLI())
+        disable_improv();
+    else
+#endif
+        setup_improv();
 }
 
 void set_state(improv::State state)
@@ -309,7 +339,7 @@ bool onCommandCallback(improv::ImprovCommand cmd)
 
 void improv_loop()
 {
-    if (!improv_setup_done)
+    if (!improv_setup_done || !serialConsole.isEnabled())
         return;
 
     while (Serial.available() > 0)

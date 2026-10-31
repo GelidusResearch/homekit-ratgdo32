@@ -50,6 +50,8 @@ void homekit_loop();
 #ifdef USE_DHT22
 #define HOMEKIT_AID_TEMP_HUMIDITY 10
 #endif
+#define HOMEKIT_AID_STOP 12
+#define HOMEKIT_AID_MANUALLY_OPERATED 11
 
 enum Light_t : uint8_t
 {
@@ -69,6 +71,11 @@ extern bool enable_service_homekit_room_occupancy(bool enable);
 extern void notify_homekit_room_occupancy(bool occupied);
 #ifdef USE_DHT22
 extern void notify_homekit_temperature_humidity(float temp, float hum);
+#endif
+extern bool enable_service_homekit_stop(bool enable);
+#ifdef RATGDO_ENCODER
+extern bool enable_service_homekit_manually_operated(bool enable);
+extern void notify_homekit_manually_operated(bool state);
 #endif
 
 extern void homekit_unpair();
@@ -149,4 +156,26 @@ struct DEV_TempHumidity : Service::TemperatureSensor
     void setValues(float temp, float hum);
 };
 #endif // USE_DHT22
+struct DEV_Stop : Service::Switch
+{
+    Characteristic::On *on;
+
+    QueueHandle_t event_q;
+
+    DEV_Stop();
+    boolean update();
+    void loop();
+};
+
+#ifdef RATGDO_ENCODER
+struct DEV_ManuallyOperated : Service::ContactSensor
+{
+    Characteristic::ContactSensorState *state;
+
+    QueueHandle_t event_q;
+
+    DEV_ManuallyOperated();
+    void loop();
+};
+#endif
 #endif // ESP8266

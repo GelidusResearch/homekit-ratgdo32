@@ -21,6 +21,8 @@
 #ifndef ESP8266
 #include <esp32-hal.h>
 #include <esp_core_dump.h>
+#include <lwip/opt.h>
+#include <arch/sys_arch.h>
 #endif
 
 // RATGDO project includes
@@ -28,9 +30,18 @@
 #include "config.h"
 #include "utilities.h"
 #include "web.h"
+#include "comms.h"
+#include <cstring>
+
+#ifndef ESP8266
+// Protected by logMutex. Absolute byte positions let a reader detect when
+// newer messages have overwritten bytes it has not copied yet.
+static uint64_t logAppendBytes = 0;
+#endif
 
 // Logger tag
 static const char *TAG = "ratgdo-logger";
+SerialConsoleState serialConsole;
 
 // Construct the singleton object for logger access
 LOG *LOG::instancePtr = new LOG();
@@ -48,26 +59,29 @@ esp_log_level_t logLevel = ESP_LOG_VERBOSE;
 #define SERIAL_PRINT(x)         \
     do                          \
     {                           \
-        if (!suppressSerialLog) \
+        if (serialConsole.isReady() && !suppressSerialLog && Serial) \
             Serial.print(x);    \
     } while (0)
 
 // Allows us to intercept all ESP_LOGx() even outside our code.
 void esp_log_hook(const char *fmt, va_list args)
 {
-    if (!Serial)
+#ifndef ESP8266
+    // Serial setup and fallback output also acquire driver locks. Core-held
+    // logs may only enter the preallocated logger buffer, when it exists.
+    if (sys_thread_tcpip(LWIP_CORE_LOCK_QUERY_HOLDER))
     {
-        // Before we can log anything, we need to initialize the serial port.
-        Serial.begin(115200);
-        while (!Serial)
-            ; // Wait for serial port to open
-        Serial.print("\n\n\n");
+        if (ratgdoLogger)
+            ratgdoLogger->logToBuffer(fmt, args);
+        return;
     }
+#endif
+    serialConsole.ensureStarted(Serial);
     if (ratgdoLogger)
     {
         ratgdoLogger->logToBuffer(fmt, args);
     }
-    else if (!suppressSerialLog)
+    else if (serialConsole.isReady() && !suppressSerialLog && Serial)
     {
         // We should only ever come here if ratgdoLogger has not been constructed
         // which would only be in very early part of booting the system
@@ -140,9 +154,8 @@ const int rtcSize = sizeof(rtcRebootLog) + sizeof(rtcCrashLog) + sizeof(rebootTi
 
 void panic_handler(arduino_panic_info_t *info, void *arg)
 {
-    // As precaution... reset UART pins as failing to do this could cause the door to open/close
-    gpio_reset_pin(UART_TX_PIN);
-    gpio_reset_pin(UART_RX_PIN);
+    // Stop the inverted transmitter without driver locks or a pull-up reset.
+    quiesce_gdo_tx();
 
     // crashCount could be negative... indicating that there is a core dump image, but no saved crash log.
     // But now we are saving a crash log, so need to make sure it is positive.
@@ -208,9 +221,33 @@ LOG::LOG()
     msgBuffer->head = 0;
 }
 
+void LOG::disableSerialConsole()
+{
+    // Drain any in-flight logger serial write before UART teardown. Release the
+    // log lock before end(), which can itself emit framework log messages.
+    TAKE_MUTEX();
+    serialConsole.disable();
+    suppressSerialLog = true;
+    GIVE_MUTEX();
+}
+
 void LOG::logToBuffer(const char *fmt, va_list args)
 {
-    TAKE_MUTEX();
+#ifndef ESP8266
+    // lwIP logs while holding its non-recursive TCPIP core lock. Socket
+    // delivery would take that lock again; waiting for another logger can
+    // also deadlock if that logger is waiting for the core.
+    const bool coreLocked = sys_thread_tcpip(LWIP_CORE_LOCK_QUERY_HOLDER);
+    if (coreLocked)
+    {
+        if (xSemaphoreTakeRecursive(logMutex, 0) != pdTRUE)
+            return;
+    }
+    else
+#endif
+    {
+        TAKE_MUTEX();
+    }
     // parse the format string into lineBuffer
     vsnprintf(lineBuffer, LINE_BUFFER_SIZE, fmt, args);
     // If timestamp is wrapped in () and not [] then message is from one of the ESP_LOGx() functions.
@@ -231,14 +268,19 @@ void LOG::logToBuffer(const char *fmt, va_list args)
         lineBuffer[LINE_BUFFER_SIZE - 1] = 0;
     }
 
-    //  print line to the serial port
-    SERIAL_PRINT(lineBuffer);
+    // UART output can wait for a driver mutex or TX space. Keep core-held
+    // logging in the preallocated ring without any serial or network I/O.
+#ifndef ESP8266
+    if (!coreLocked)
+#endif
+        SERIAL_PRINT(lineBuffer);
 
     // copy the line into the message save buffer
     size_t len = strlen(lineBuffer);
     size_t available = sizeof(msgBuffer->buffer) - msgBuffer->head;
     memcpy(&msgBuffer->buffer[msgBuffer->head], lineBuffer, min(available, len));
-    if (available < len)
+    // Exact fills must wrap too, keeping the terminator inside the ring.
+    if (available <= len)
     {
         // we wrapped on the available buffer space
         msgBuffer->wrapped = 1;
@@ -250,9 +292,16 @@ void LOG::logToBuffer(const char *fmt, va_list args)
         msgBuffer->head += len;
     }
     msgBuffer->buffer[msgBuffer->head] = 0; // null terminate
+#ifndef ESP8266
+    logAppendBytes += len;
+#endif
 
     static bool inFn = false;
-    if (!inFn)
+    if (!inFn
+#ifndef ESP8266
+        && !coreLocked
+#endif
+    )
     {
         // Control recursion... make sure we don't get into a loop if any
         // of the functions we use here log a message.  This is known to happen
@@ -272,10 +321,13 @@ void LOG::clearCrashLog()
 {
 #ifdef ESP8266
     saveCrash.clear();
+    crashCount = 0;
 #else
     esp_core_dump_image_erase();
-#endif
+    TAKE_MUTEX();
     crashCount = 0;
+    GIVE_MUTEX();
+#endif
 }
 
 #ifdef ESP8266
@@ -307,15 +359,22 @@ void LOG::printCrashLog(Print &outputDev)
 #else
 void LOG::printCrashLog(Print &outputDev)
 {
+    // The RTC crash log is written only by the panic handler, which resets the
+    // device. Snapshot ordinary mutable metadata without holding the logger
+    // lock across flash access or potentially blocking output.
     TAKE_MUTEX();
-    if (crashCount > 0)
+    const int32_t savedCrashCount = crashCount;
+    const time_t savedCrashTime = crashTime;
+    const _millis_t savedCrashUpTime = crashUpTime;
+    GIVE_MUTEX();
+    if (savedCrashCount > 0)
     {
-        if (crashTime)
+        if (savedCrashTime)
         {
-            outputDev.printf("Server boot time: %llu (%s)\n", crashTime - (crashUpTime / 1000), timeString(crashTime - (crashUpTime / 1000)));
-            outputDev.printf("Server crash time: %llu (%s)\n", crashTime, timeString(crashTime));
+            outputDev.printf("Server boot time: %llu (%s)\n", savedCrashTime - (savedCrashUpTime / 1000), timeString(savedCrashTime - (savedCrashUpTime / 1000)));
+            outputDev.printf("Server crash time: %llu (%s)\n", savedCrashTime, timeString(savedCrashTime));
         }
-        outputDev.printf("Server uptime: %llu ms (%s)\n", crashUpTime, toHHMMSSmmm((_millis_t)crashUpTime));
+        outputDev.printf("Server uptime: %llu ms (%s)\n", savedCrashUpTime, toHHMMSSmmm((_millis_t)savedCrashUpTime));
         outputDev.printf("Crash reason: %s\n", reasonString);
         outputDev.printf("Firmware version: %s\n\n", crashVersion);
         outputDev.flush();
@@ -335,13 +394,13 @@ void LOG::printCrashLog(Print &outputDev)
         {
             if (esp_core_dump_get_summary(summary) == ESP_OK)
             {
-                if (crashCount <= 0)
+                if (savedCrashCount <= 0)
                     outputDev.print("No saved message log available.\n");
 
                 outputDev.print("\n\n");
                 outputDev.printf("Crash in task: %s, at address: 0x%08lX\n", summary->exc_task, summary->exc_pc);
                 outputDev.print("Decode backtrace with this Linux command:\n\n");
-                if (crashCount > 0)
+                if (savedCrashCount > 0)
                     outputDev.printf("addr2line -p -f -C -e homekit-ratgdo32-v%s.elf \\\n", crashVersion);
                 else
                     outputDev.print("addr2line -p -f -C -e firmware.elf \\\n");
@@ -362,7 +421,6 @@ void LOG::printCrashLog(Print &outputDev)
     {
         outputDev.print("\n\nNo core dump image available.\n");
     }
-    GIVE_MUTEX();
 }
 
 void LOG::saveMessageLog()
@@ -447,7 +505,38 @@ void LOG::printSavedLog(Print &outputDev)
 
 void LOG::printMessageLog(Print &outputDev, bool slow)
 {
+#ifndef ESP8266
+    uint64_t end = 0;
+    uint64_t next = 0;
+    size_t index = 0;
+    char chunk[256];
+    size_t length = 0;
+    // Called only with logMutex held; the stack chunk remains stable during I/O.
+    auto copyChunk = [&]()
+    {
+        const size_t capacity = sizeof(msgBuffer->buffer);
+        length = static_cast<size_t>(std::min<uint64_t>(sizeof(chunk), end - next));
+        const size_t first = std::min(length, capacity - index);
+        memcpy(chunk, msgBuffer->buffer + index, first);
+        if (first < length)
+            memcpy(chunk + first, msgBuffer->buffer, length - first);
+        index = (index + length) % capacity;
+        next += length;
+    };
     TAKE_MUTEX();
+    if (msgBuffer)
+    {
+        end = logAppendBytes;
+        const size_t capacity = sizeof(msgBuffer->buffer);
+        const size_t saved = msgBuffer->wrapped ? capacity - 1 : msgBuffer->head;
+        next = end - saved;
+        index = msgBuffer->wrapped ? (msgBuffer->head + 1) % capacity : 0;
+        if (next < end)
+            copyChunk();
+    }
+    GIVE_MUTEX();
+#endif
+
     if (clockSet)
     {
         time_t now = time(NULL);
@@ -459,8 +548,15 @@ void LOG::printMessageLog(Print &outputDev, bool slow)
     outputDev.println("Firmware version: " AUTO_VERSION);
     outputDev.printf_P(PSTR("Free heap: %d\n"), free_heap);
     outputDev.printf_P(PSTR("Minimum heap: %d\n"), min_heap);
+    if (doorControlType == DOOR_CONTROL_SEC_PLUS_V2)
+    {
+        outputDev.printf_P(PSTR("GDO Firmware version: %s\n"), gdoFirmwareVersion);
+    }
+    outputDev.printf_P(PSTR("\n"));
     outputDev.flush();
 
+#ifdef ESP8266
+    // Single threaded; preserve the existing IRAM output path.
     if (msgBuffer)
     {
         // +1 head points to a zero (null terminator of previous log line) which we need to skip.
@@ -470,14 +566,11 @@ void LOG::printMessageLog(Print &outputDev, bool slow)
         // On slow output devices (e.g. network), chunk up to protect against buffer overflow
         size_t CHUNK = (slow) ? TCP_SND_BUF / 2 : sizeof(msgBuffer->buffer);
         size_t chunk;
-        SERIAL_PRINT("Send message log.");
         if (msgBuffer->wrapped != 0)
         {
             while (len)
             {
                 chunk = std::min(len, CHUNK);
-                // Progress dot dot dot
-                SERIAL_PRINT(".");
                 YIELD();
                 outputDev.write(&msgBuffer->buffer[start], chunk);
                 if (slow)
@@ -491,17 +584,41 @@ void LOG::printMessageLog(Print &outputDev, bool slow)
         while (len)
         {
             chunk = std::min(len, CHUNK);
-            // Progress dot dot dot
-            SERIAL_PRINT(".");
             YIELD();
             outputDev.write(&msgBuffer->buffer[start], chunk);
             outputDev.flush();
             len -= chunk;
             start += chunk;
         }
-        SERIAL_PRINT("\n");
     }
-    GIVE_MUTEX();
+#else
+    while (length)
+    {
+        YIELD();
+        if (outputDev.write(reinterpret_cast<const uint8_t *>(chunk), length) != length)
+            return;
+        if (slow)
+            outputDev.flush();
+
+        bool overwritten = false;
+        TAKE_MUTEX();
+        length = 0;
+        if (next < end)
+        {
+            if (logAppendBytes - next > sizeof(msgBuffer->buffer) - 1)
+                overwritten = true;
+            else
+                copyChunk();
+        }
+        GIVE_MUTEX();
+        if (overwritten)
+        {
+            outputDev.print("\nLog truncated: newer messages overwrote unread log data.\n");
+            return;
+        }
+    }
+    outputDev.flush();
+#endif
 }
 
 /****************************************************************************

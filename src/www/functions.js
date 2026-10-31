@@ -19,9 +19,24 @@ var setGDOcmds = {              // setGDO commands that are not sent from server
     resetDoor: false,
     softAPmode: false,
     factoryReset: false,
+    resetEncoderCal: false,
 };
 var gitUser = "gelidusresearch";         // default git user.
 var gitRepo = "homekit-ratgdo32"; // default git repository.
+
+function selectFirmwareAsset(assets, revision) {
+    const firmware = assets.filter(asset => asset.name.endsWith(".firmware.bin"));
+    if (gitRepo !== "homekit-ratgdo32") {
+        return firmware.find(asset => asset.name.startsWith(gitRepo + "-"));
+    }
+    if (!["rev1", "rev2"].includes(revision)) return undefined;
+    // Prefer the exact board even if a legacy generic asset appears first.
+    return firmware.find(asset => asset.name.startsWith(`homekit-grgdo1-${revision}-`)) ||
+        firmware.find(asset => /^homekit-grgdo1-v\d+\./.test(asset.name));
+}
+
+var passwordHash = undefined;
+const www_realm = "RATGDO Login Required";
 
 // See... https://github.com/nayarsystems/posix_tz_db
 // This is CSV form of the data, available at this web page.
@@ -147,10 +162,13 @@ function toggleDCOpenClose(radio) {
     document.getElementById("dcOpenClose").disabled = (value == 3);
     document.getElementById("obstFromStatus").disabled = (value == 3);
     document.getElementById("useToggle").disabled = (value != 2);
-    document.getElementById("homekitLight").disabled = (value == 3);
+    document.getElementById("lightHomeKit").disabled = (value == 3);
     document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
     document.getElementById("dcDebounceDuration").disabled = (value != 3);
     document.getElementById("motionMotion").disabled = (value != 2);
+    // document.getElementById("encoderEnabled").disabled = (value != 3);
+    document.getElementById("wpDisconnectOnTx").disabled = (value != 1) || serverStatus.wpDisconnectSupported === false;
+    toggleEncoderOptions();
     toggleHardwiredBypassRow();
 }
 
@@ -162,9 +180,18 @@ function toggleHardwiredBypassRow() {
     checkbox.disabled = !enabled;
 }
 
+function toggleEncoderOptions() {
+    const enabled = document.getElementById("encoderEnabled").checked;
+    const uiDisabled = document.getElementById("encoderEnabled").disabled;
+    document.getElementById("encoderReversed").disabled = uiDisabled || !enabled;
+    document.getElementById("resetEncoderCalBtn").disabled = uiDisabled || !enabled;
+    document.getElementById("encStepsRow").style.opacity = uiDisabled || !enabled ? 0.5 : 1;
+}
+
 // enable laser
 function enableLaser(value) {
     document.getElementById('laserHomeKit').disabled = !value;
+    document.getElementById('laserOnDoorOpen').disabled = !value;
     document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
     document.getElementById("assistDuration").disabled = !value;
     document.getElementById("parkAssist").style.opacity = value ? "1" : "0.5";
@@ -183,8 +210,11 @@ function toggleStaticIP() {
 
 // Show or hide the syslog IP field
 function toggleTimeZone() {
-    document.getElementById("timeZoneRow").style.opacity = (this.event.target.checked) ? 1 : 0.5;
-    document.getElementById("timeZoneInput").disabled = !this.event.target.checked;
+    const enabled = this.event.target.checked;
+    document.getElementById("ntpServerRow").style.opacity = enabled ? 1 : 0.5;
+    document.getElementById("ntpServer").disabled = !enabled;
+    document.getElementById("timeZoneRow").style.opacity = enabled ? 1 : 0.5;
+    document.getElementById("timeZoneInput").disabled = !enabled;
     // called for both checked and unchecked... to reset selection if necessary.
     loadTZinfo(document.getElementById("timeZoneInput"));
 }
@@ -403,10 +433,14 @@ function setElementsFromStatus(status) {
                 document.getElementById("dcOpenClose").disabled = (value == 3);
                 document.getElementById("obstFromStatus").disabled = (value == 3);
                 document.getElementById("useToggle").disabled = (value != 2);
-                document.getElementById("homekitLight").disabled = (value == 3);
+                document.getElementById("lightHomeKit").disabled = (value == 3);
                 document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
                 document.getElementById("dcDebounceDuration").disabled = (value != 3);
                 document.getElementById("motionMotion").disabled = (value != 2);
+                //document.getElementById("encoderEnabled").disabled = (value != 3);
+                document.getElementById("gdoFirmwareRow").style.display = (value == 2) ? "table-row" : "none";
+                document.getElementById("wpDisconnectOnTx").disabled = (value != 1) || serverStatus.wpDisconnectSupported === false;
+                toggleEncoderOptions();
                 toggleHardwiredBypassRow();
                 break;
             case "pinBasedObst":
@@ -416,11 +450,11 @@ function setElementsFromStatus(status) {
                 document.getElementById("sec1emulation").style.display = (value == true) ? "" : "none";
                 break;
             case "deviceName":
-                document.getElementById(key).innerHTML = value;
+                document.getElementById(key).textContent = value;
                 document.title = value;
                 document.getElementById("newDeviceName").placeholder = value;
                 let mdnsName = makeRfc952(value) + ".local";
-                document.getElementById("mdnsName").innerHTML = mdnsName;
+                document.getElementById("mdnsName").textContent = mdnsName;
                 break;
             case "userName":
                 document.getElementById("newUserName").placeholder = value;
@@ -477,7 +511,8 @@ function setElementsFromStatus(status) {
                 document.getElementById("vehicleSetting").style.display = (value) ? "table-row" : "none";
                 document.getElementById("vehicleSettingsSpacer").style.display = (value) ? "table-row" : "none";
                 setVehicleConfigVisibility(value);
-                document.getElementById("laserSetting").style.display = (value) ? "table-row" : "none";
+                document.getElementById("laserSetting").style.display = (value && serverStatus.laserSupported !== false) ? "table-row" : "none";
+                document.getElementById("laserOnDoorOpenRow").style.display = (value && serverStatus.laserSupported !== false) ? "table-row" : "none";
                 break;
             case "vehicleThreshold":
                 document.getElementById(key).value = value;
@@ -488,17 +523,26 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("vehicleDistInch").innerHTML = Math.round(value / .254) / 10;
                 break;
+            case "laserSupported":
+                document.getElementById("laserSetting").style.display = value && serverStatus.distanceSensor ? "table-row" : "none";
+                document.getElementById("laserOnDoorOpenRow").style.display = value && serverStatus.distanceSensor ? "table-row" : "none";
+                break;
+            case "wpDisconnectSupported":
+                document.getElementById("wpDisconnectOnTxRow").style.display = value ? "table-row" : "none";
+                document.getElementById("wpDisconnectOnTx").disabled = !value || serverStatus.GDOSecurityType != 1;
+                break;
             case "laserEnabled":
                 document.getElementById(key).checked = value;
                 document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
                 document.getElementById("laserHomeKit").disabled = !value;
+                document.getElementById("laserOnDoorOpen").disabled = !value;
                 document.getElementById("parkAssist").style.display = (value) ? "table-row" : "none";
                 break;
             case "homespanCLI":
                 document.getElementById(key).checked = value;
                 document.getElementById("homespanSetting").style.display = "table-row";
                 break;
-            case "homekitLight":
+            case "lightHomeKit":
                 document.getElementById(key).checked = value;
                 document.getElementById("homekitLightRow").style.display = "table-row";
                 break;
@@ -506,14 +550,21 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).checked = value;
                 document.getElementById("homekitMotionRow").style.display = "table-row";
                 break;
+            case "stopDoorHomeKit":
+                document.getElementById(key).checked = value;
+                document.getElementById("homekitStopDoorRow").style.display = "table-row";
+                break;
             case "vehicleHomeKit":
                 document.getElementById(key).checked = value;
                 setVehicleSensorOptionState(value);
                 break;
             case "laserHomeKit":
+            case "laserOnDoorOpen":
             case "useToggle":
             case "useSWserial":
             case "obstFromStatus":
+            case "reverseOnStop":
+            case "wpDisconnectOnTx":
                 document.getElementById(key).checked = value;
                 break;
             case "dcOpenClose":
@@ -524,6 +575,19 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).checked = value;
                 toggleHardwiredBypassRow();
                 break;
+            case "encoderEnabled":
+                document.getElementById(key).checked = value;
+                document.getElementById("encoderRow").style.display = "table-row";
+                document.getElementById("encoderReversedRow").style.display = "table-row";
+                document.getElementById("encStepsRow").style.display = "table-row";
+                toggleEncoderOptions();
+                break;
+            case "encoderReversed":
+                document.getElementById(key).checked = value;
+                break;
+            case "encSteps":
+                document.getElementById(key).innerHTML = value;
+                break;
             case "vehicleOccupancyHomeKit":
             case "vehicleArrivingHomeKit":
             case "vehicleDepartingHomeKit":
@@ -532,6 +596,11 @@ function setElementsFromStatus(status) {
             case "TTClight":
                 document.getElementById(key).checked = value;
                 document.getElementById("TTCwarning2").style.display = (value) ? "none" : "inline";
+                break;
+            case "TTCsound":
+                document.getElementById("TTCsoundRow").style.display = "table-row";
+                document.getElementById(key).checked = value;
+                document.getElementById("TTCwarning3").style.display = (value) ? "none" : "inline";
                 break;
             case "assistDuration":
                 document.getElementById(key).value = value;
@@ -629,8 +698,13 @@ function setElementsFromStatus(status) {
                 break;
             case "enableNTP":
                 document.getElementById(key).checked = value;
+                document.getElementById("ntpServerRow").style.opacity = (value) ? 1 : 0.5;
+                document.getElementById("ntpServer").disabled = !value;
                 document.getElementById("timeZoneRow").style.opacity = (value) ? 1 : 0.5;
                 document.getElementById("timeZoneInput").disabled = !value;
+                break;
+            case "ntpServer":
+                document.getElementById(key).placeholder = value;
                 break;
             case "enableIPv6":
                 document.getElementById(key).checked = value;
@@ -661,6 +735,14 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
                 document.getElementById("lightButton").value = (value == false) ? "Light On" : "Light Off";
                 break;
+            case "encDoorPosition":
+                if (value > 0 && value < 100) {
+                    document.getElementById("ttcActive").innerHTML = `&nbsp;${value}%`;
+                    document.getElementById("ttcActive").style.display = "";
+                } else {
+                    document.getElementById("ttcActive").style.display = "none";
+                }
+                break;
             case "garageDoorState":
                 document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
                 // We have to use global serverStatus rather than local status, as local one only contains values
@@ -678,6 +760,9 @@ function setElementsFromStatus(status) {
             case "garageObstructed":
             case "garageMotion":
                 document.getElementById(key).innerHTML = capitalizeFirstLetter(value);
+                break;
+            case "manuallyOperated":
+                document.getElementById(key).style.display = (value == true) ? "" : "none";
                 break;
             case "ttcActive":
                 if (value) {
@@ -794,8 +879,13 @@ async function checkStatus() {
                 }
             })
             .then((text) => {
-                serverStatus = JSON.parse(text);
-                console.log(serverStatus);
+                try {
+                    serverStatus = JSON.parse(text);
+                    console.log(serverStatus);
+                } catch (error) {
+                    console.error(`Error parsing status JSON: ${error}`);
+                    console.log(`Status text: ${text}`);
+                }
                 serverStatus = { ...serverStatus, ...setGDOcmds }; // merge-in setGDO command constants
                 // Add letter 'v' to front of returned firmware version.
                 // Hack because firmware uses v0.0.0 and 0.0.0 for different purposes.
@@ -925,30 +1015,7 @@ async function checkVersion(progress = "dotdot1") {
     serverStatus.latestVersion = latest;
     if (latest) {
         console.log("Newest version: " + latest.tag_name);
-        const asset = latest.assets.find((obj) => {
-            if (gitRepo == "homekit-ratgdo32") {
-                // Filter by hardware revision (default to rev2 if not set)
-                const hwRev = serverStatus.hardwareRevision || "rev2";
-                console.log(`Searching for firmware matching hardware revision: ${hwRev}`);
-
-                // Check for firmware with hardware revision in name (new format)
-                const hasRevisionMatch = (obj.content_type === "application/octet-stream") &&
-                       (obj.name.startsWith("homekit-grgdo1") &&
-                        obj.name.includes("firmware") &&
-                        obj.name.includes(hwRev));
-
-                // Fallback: Check for firmware without hardware revision (old format)
-                const hasGenericMatch = (obj.content_type === "application/octet-stream") &&
-                       (obj.name.startsWith("homekit-grgdo1") &&
-                        obj.name.includes("firmware") &&
-                        !obj.name.includes("rev1") &&
-                        !obj.name.includes("rev2"));
-
-                return hasRevisionMatch || hasGenericMatch;
-            } else {
-                return (obj.content_type === "application/octet-stream") && (obj.name.startsWith(gitRepo));
-            }
-        });
+        const asset = selectFirmwareAsset(latest.assets, serverStatus.hardwareRevision || "rev2");
         if (latest?.body) {
             document.getElementById("firmwareDescription").innerHTML = marked.parse(latest.body);
         }
@@ -1105,6 +1172,7 @@ async function firmwareUpdate(github = true) {
         var response = await fetch(`update?action=update&size=${bin.byteLength}&md5=${binMD5}`, {
             method: "POST",
             body: formData,
+            headers: { 'X-API-Key': passwordHash }
         });
         showRebootMsg = true;
         if (response.status !== 200) {
@@ -1163,7 +1231,7 @@ async function unpairRATGDO() {
     }
     loaderElem.style.visibility = "visible";
     var response = await fetch("reset", {
-        method: "POST",
+        method: "POST", headers: { 'X-API-Key': passwordHash }
     });
     loaderElem.style.visibility = "hidden";
     if (response.status !== 200) {
@@ -1173,20 +1241,77 @@ async function unpairRATGDO() {
     countdown(rebootSeconds, "RATGO un-pairing and rebooting...&nbsp;");
 }
 
-async function checkAuth(loader = true) {
-    auth = false;
-    if (loader) loaderElem.style.visibility = "visible";
-    var response = await fetch("auth", {
-        method: "GET",
-    });
-    if (loader) loaderElem.style.visibility = "hidden";
-    // Give browser a moment to actually hide the spinner...
-    await new Promise(r => setTimeout(r, 50));
-    if (response.status == 200) {
-        auth = true;
+async function promptPassword() {
+    if (serverStatus?.passwordRequired && passwordHash === undefined) {
+        const password = await new Promise((resolve) => {
+            const modal = document.getElementById("passwordModal");
+            const form = document.getElementById("passwordForm");
+            const username = document.getElementById("authUsername");
+            const input = document.getElementById("authPassword");
+            const cancel = document.getElementById("passwordCancel");
+            const finish = (value) => {
+                form.removeEventListener("submit", submit);
+                username.removeEventListener("keydown", submitOnEnter);
+                input.removeEventListener("keydown", submitOnEnter);
+                cancel.removeEventListener("click", cancelPassword);
+                modal.style.display = "none";
+                username.value = "";
+                input.value = "";
+                resolve(value);
+            };
+            const submit = (event) => {
+                event.preventDefault();
+                finish({ username: username.value, password: input.value });
+            };
+            const submitOnEnter = (event) => {
+                if (event.key === "Enter") {
+                    event.preventDefault();
+                    submit(event);
+                }
+            };
+            const cancelPassword = () => finish(null);
+
+            form.addEventListener("submit", submit);
+            username.addEventListener("keydown", submitOnEnter);
+            input.addEventListener("keydown", submitOnEnter);
+            cancel.addEventListener("click", cancelPassword);
+            username.value = serverStatus.userName || "admin";
+            modal.style.display = "block";
+            input.focus();
+        });
+        if (password === null) {
+            console.warn("User cancelled password dialog");
+            return false;
+        }
+        // MD5() function expects a Uint8Array typed ArrayBuffer...
+        passwordHash = MD5((new TextEncoder).encode(password.username + ":" + www_realm + ":" + password.password));
     }
-    else if (response.status == 401) {
-        console.warn("Not Authenticated");
+    return true;
+}
+
+async function checkAuth(loader = true) {
+    let auth = false;
+    let prompt = (serverStatus?.passwordRequired && passwordHash === undefined);
+    if (await promptPassword()) {
+        if (loader) loaderElem.style.visibility = "visible";
+        let response = await fetch("auth", { method: "GET", headers: { 'X-API-Key': passwordHash } });
+        if (loader) loaderElem.style.visibility = "hidden";
+        // Give browser a moment to actually hide the spinner...
+        await new Promise(r => setTimeout(r, 50));
+        if (response.status == 200) {
+            auth = true;
+        }
+        else if (response.status == 401) {
+            console.warn("401 Not Authenticated");
+        }
+        else if (response.status == 403) {
+            console.warn("403 Forbidden, authentication failed");
+            passwordHash = undefined;
+            if (prompt) alert("Authentication failed, please try again.");
+        }
+        else {
+            console.warn(`Unexpected response from server: ${response.status}`);
+        }
     }
     return auth;
 }
@@ -1196,6 +1321,8 @@ async function setGDO(...args) {
         // check if authenticated, before post to setgdo, prevents timeout of dialog due to AbortSignal
         loaderElem.style.visibility = "visible";
         if (!await checkAuth(false)) {
+            loaderElem.style.visibility = "hidden";
+            console.warn("Authentication failed in setGDO");
             return false;
         }
         const formData = new FormData();
@@ -1218,6 +1345,7 @@ async function setGDO(...args) {
                 method: "POST",
                 body: formData,
                 signal: AbortSignal.timeout(2000),
+                headers: { 'X-API-Key': passwordHash }
             });
             if (response.status !== 200) {
                 console.warn("Error setting RATGDO state");
@@ -1267,18 +1395,18 @@ async function changePassword() {
     }
     let www_username = document.getElementById("newUserName").value.substring(0, 30);
     if (www_username.length == 0) www_username = serverStatus.userName ?? "admin";
-    const www_realm = "RATGDO Login Required";
     // MD5() function expects a Uint8Array typed ArrayBuffer...
-    const passwordHash = MD5((new TextEncoder).encode(www_username + ":" + www_realm + ":" + newPW.value));
-    console.log("Set new credentials to: " + passwordHash);
+    let newHash = MD5((new TextEncoder).encode(www_username + ":" + www_realm + ":" + newPW.value));
+    console.log("Set new credentials");
     await setGDO("credentials", JSON.stringify({
         username: www_username,
-        credentials: passwordHash,
+        credentials: newHash,
         password: newPW.value
     }));
     clearTimeout(checkHeartbeat);
     // On success, go to home page.
     // User will have to re-authenticate to get back to settings.
+    passwordHash = undefined;
     location.href = "/";
     return;
 }
@@ -1353,6 +1481,18 @@ async function saveSettings() {
             msg = "WARNING: You have disabled light flashing during time-to-close.\n\n" + msg;
         }
     }
+    let TTCsound = '1';
+    if (!document.getElementById("TTCsound").checked) {
+        TTCsound = '0';
+        if (msg == "") {
+            msg = "WARNING: You have disabled sound during time-to-close.\n\n" +
+                "This violates US Consumer Product Safety Act Regulations, section 1211.14, unattended operation requirements. " +
+                "By disabling sound you accept all responsibility and liability for injury or any other loss.\n\n";
+        }
+        else {
+            msg = "WARNING: You have disabled sound during time-to-close.\n\n" + msg;
+        }
+    }
     let builtInTTC = Math.max(parseInt(document.getElementById("builtInTTC").value), 0);
     if (isNaN(builtInTTC)) builtInTTC = 0;
     builtInTTC = (builtInTTC <= 10) ? builtInTTC * 60 :
@@ -1389,11 +1529,17 @@ async function saveSettings() {
     const vehicleDepartingHomeKit = (document.getElementById("vehicleDepartingHomeKit").checked) ? '1' : '0';
     const laserEnabled = (document.getElementById("laserEnabled").checked) ? '1' : '0';
     const laserHomeKit = (document.getElementById("laserHomeKit").checked) ? '1' : '0';
+    const laserOnDoorOpen = (document.getElementById("laserOnDoorOpen").checked) ? '1' : '0';
     const dcOpenClose = (document.getElementById("dcOpenClose").checked) ? '1' : '0';
     const dcBypassTTC = (document.getElementById("dcBypassTTC").checked) ? '1' : '0';
     const useToggle = (document.getElementById("useToggle").checked) ? '1' : '0';
     const useSWserial = (document.getElementById("useSWserial").checked) ? '1' : '0';
     const obstFromStatus = (document.getElementById("obstFromStatus").checked) ? '1' : '0';
+    const reverseOnStop = (document.getElementById("reverseOnStop").checked) ? '1' : '0';
+    // Encoder settings — only present in dry contact mode on ESP32 firmware
+    const encoderEnabled = (document.getElementById("encoderEnabled").checked) ? '1' : '0';
+    const encoderReversed = (document.getElementById("encoderReversed").checked) ? '1' : '0';
+    const wpDisconnectOnTx = (document.getElementById("wpDisconnectOnTx").checked) ? '1' : '0';
 
     let assistDuration = Math.max(Math.min(parseInt(document.getElementById("assistDuration").value), 300), 0);
     if (isNaN(assistDuration)) assistDuration = 0;
@@ -1424,12 +1570,15 @@ async function saveSettings() {
     let nameserverIP = document.getElementById("IPnameserver").value.substring(0, 15);
     if (nameserverIP.length == 0) nameserverIP = serverStatus.nameserverIP;
     const enableNTP = (document.getElementById("enableNTP").checked) ? '1' : '0';
+    let ntpServer = document.getElementById("ntpServer").value.substring(0, 63).trim();
+    if (ntpServer.length == 0) ntpServer = serverStatus.ntpServer;
     const enableIPv6 = (document.getElementById("enableIPv6").checked) ? '1' : '0';
     const list = document.getElementById("timeZoneInput");
     const timeZone = list.options[list.selectedIndex].text + ';' + list.options[list.selectedIndex].value;
     const homespanCLI = (document.getElementById("homespanCLI").checked) ? '1' : '0';
-    const homekitLight = (document.getElementById("homekitLight").checked) ? '1' : '0';
+    const lightHomeKit = (document.getElementById("lightHomeKit").checked) ? '1' : '0';
     const motionHomeKit = (document.getElementById("motionHomeKit").checked) ? '1' : '0';
+    const stopDoorHomeKit = (document.getElementById("stopDoorHomeKit").checked) ? '1' : '0';
 
     let dht22Pin = parseInt(document.getElementById("dht22Pin").value);
     if (isNaN(dht22Pin)) dht22Pin = -1;
@@ -1453,6 +1602,7 @@ async function saveSettings() {
         "TTCseconds", TTCseconds,
         "builtInTTC", builtInTTC,
         "TTClight", TTClight,
+        "TTCsound", TTCsound,
         "vehicleThreshold", vehicleThreshold,
         "vehicleHomeKit", vehicleHomeKit,
         "vehicleOccupancyHomeKit", vehicleOccupancyHomeKit,
@@ -1460,6 +1610,7 @@ async function saveSettings() {
         "vehicleDepartingHomeKit", vehicleDepartingHomeKit,
         "laserEnabled", laserEnabled,
         "laserHomeKit", laserHomeKit,
+        "laserOnDoorOpen", laserOnDoorOpen,
         "dcOpenClose", dcOpenClose,
         "dcBypassTTC", dcBypassTTC,
         "useToggle", useToggle,
@@ -1473,6 +1624,7 @@ async function saveSettings() {
         "gatewayIP", gatewayIP,
         "nameserverIP", nameserverIP,
         "enableNTP", enableNTP,
+        "ntpServer", ntpServer,
         "enableIPv6", enableIPv6,
         "timeZone", timeZone,
         "syslogEn", syslogEn,
@@ -1482,12 +1634,17 @@ async function saveSettings() {
         "logLevel", logLevel,
         "useSWserial", useSWserial,
         "obstFromStatus", obstFromStatus,
+        "reverseOnStop", reverseOnStop,
         "dcDebounceDuration", dcDebounceDuration,
         "homespanCLI", homespanCLI,
         "dht22Pin", dht22Pin,
         "dht22TempFormat", dht22TempFormat,
-        "homekitLight", homekitLight,
+        "lightHomeKit", lightHomeKit,
         "motionHomeKit", motionHomeKit,
+        "stopDoorHomeKit", stopDoorHomeKit,
+        "encoderEnabled", encoderEnabled,
+        "encoderReversed", encoderReversed,
+        "wpDisconnectOnTx", wpDisconnectOnTx,
     );
     if (reboot) {
         countdown(rebootSeconds, "Settings saved, RATGDO device rebooting...&nbsp;");
@@ -1503,6 +1660,14 @@ async function resetDoor() {
     if (confirm('Reset door open/close history, rolling codes and presence of motion sensor. Settings will not change but device will reboot, are you sure?')) {
         await setGDO("resetDoor", true);
         countdown(rebootSeconds, "Door reset, RATGDO device rebooting...&nbsp;");
+    }
+    return;
+}
+
+async function resetEncoderCal() {
+    if (confirm('Clear encoder calibration data? The encoder will re-learn open/close positions on the next full open and close cycle.')) {
+        await setGDO("resetEncoderCal", '1');
+        document.getElementById("encSteps").innerHTML = '0';
     }
     return;
 }

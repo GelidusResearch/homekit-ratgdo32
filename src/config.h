@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-26 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -75,6 +75,7 @@ constexpr char cfg_rebootSeconds[] PROGMEM = "rebootSeconds";
 constexpr char cfg_LEDidle[] PROGMEM = "LEDidle";
 constexpr char cfg_motionTriggers[] PROGMEM = "motionTriggers";
 constexpr char cfg_enableNTP[] PROGMEM = "enableNTP";
+constexpr char cfg_ntpServer[] PROGMEM = "ntpServer";
 constexpr char cfg_doorUpdateAt[] PROGMEM = "doorUpdateAt";
 constexpr char cfg_doorOpenAt[] PROGMEM = "doorOpenAt";
 constexpr char cfg_doorCloseAt[] PROGMEM = "doorCloseAt";
@@ -92,10 +93,18 @@ constexpr char cfg_dcDebounceDuration[] PROGMEM = "dcDebounceDuration";
 constexpr char cfg_useSWserial[] PROGMEM = "useSWserial";
 constexpr char cfg_obstFromStatus[] PROGMEM = "obstFromStatus";
 constexpr char cfg_builtInTTC[] PROGMEM = "builtInTTC";
+constexpr char cfg_reverseOnStop[] PROGMEM = "reverseOnStop";
+constexpr char cfg_lightHomeKit[] PROGMEM = "lightHomeKit";
+constexpr char cfg_wpDisconnectOnTx[] PROGMEM = "wpDisconnectOnTx";
+#ifdef RATGDO_ENCODER
+constexpr char cfg_encoderEnabled[] PROGMEM = "encoderEnabled";
+constexpr char cfg_encoderReversed[] PROGMEM = "encoderReversed";
+#endif
 #ifdef ESP8266
 // On ESP8266 we save user config to a file in LittleFS
 constexpr char cfg_configFile[] PROGMEM = "user_config";
 #else
+#ifdef RATGDO32_DISCO
 constexpr char cfg_vehicleThreshold[] PROGMEM = "vehicleThreshold";
 constexpr char cfg_vehicleHomeKit[] PROGMEM = "vehicleHomeKit";
 constexpr char cfg_vehicleOccupancyHomeKit[] PROGMEM = "vehicleOccupancyHomeKit";
@@ -103,11 +112,13 @@ constexpr char cfg_vehicleArrivingHomeKit[] PROGMEM = "vehicleArrivingHomeKit";
 constexpr char cfg_vehicleDepartingHomeKit[] PROGMEM = "vehicleDepartingHomeKit";
 constexpr char cfg_laserEnabled[] PROGMEM = "laserEnabled";
 constexpr char cfg_laserHomeKit[] PROGMEM = "laserHomeKit";
+constexpr char cfg_laserOnDoorOpen[] PROGMEM = "laserOnDoorOpen";
 constexpr char cfg_assistDuration[] PROGMEM = "assistDuration";
+constexpr char cfg_TTCsound[] PROGMEM = "TTCsound";
+#endif
 constexpr char cfg_occupancyDuration[] PROGMEM = "occupancyDuration";
 constexpr char cfg_enableIPv6[] PROGMEM = "enableIPv6";
 constexpr char cfg_homespanCLI[] PROGMEM = "homespanCLI";
-constexpr char cfg_lightHomeKit[] PROGMEM = "lightHomeKit";
 constexpr char cfg_motionHomeKit[] PROGMEM = "motionHomeKit";
 #endif
 
@@ -117,6 +128,7 @@ constexpr char nvram_has_motion[] PROGMEM = "has_motion";
 constexpr char nvram_open_history[] PROGMEM = "open_history";
 constexpr char nvram_close_history[] PROGMEM = "close_history";
 #ifndef ESP8266
+constexpr char cfg_stopDoorHomeKit[] PROGMEM = "stopDoorHomeKit";
 constexpr char nvram_ratgdo_pw[] PROGMEM = "ratgdo_pw";
 constexpr char nvram_has_distance[] PROGMEM = "has_distance";
 #endif
@@ -129,17 +141,22 @@ struct configStr
 
 struct configSetting
 {
+    const char *key;
     bool reboot;
     bool wifiChanged;
     std::variant<bool, int, configStr> value;
     bool (*fn)(const std::string &key, const char *value, configSetting *actions);
 };
 
+// Helper function to apply timezone configuration with NTP server
+void applyTimezoneWithNTP(const char *ntpServer);
+
 class userSettings
 {
 private:
-    std::map<std::string, configSetting> settings;
     static userSettings *instancePtr;
+    configSetting *settings;
+    bool dirty = false; // true if a setting has changed since the last load() or save()
     userSettings();
     void toFile(Print &file);
 #ifndef ESP8266
@@ -150,12 +167,11 @@ public:
     userSettings(const userSettings &obj) = delete;
     static userSettings *getInstance() { return instancePtr; }
 
-    bool contains(const std::string &key);
     bool set(const std::string &key, const bool value);
     bool set(const std::string &key, const int value);
     bool set(const std::string &key, const char *value);
     std::variant<bool, int, configStr> get(const std::string &key);
-    configSetting getDetail(const std::string &key);
+    configSetting *getDetail(const std::string &key);
     void toStdOut();
     void save();
     void load();
@@ -187,6 +203,7 @@ public:
     uint32_t getLEDidle() { return std::get<int>(get(cfg_LEDidle)); };
     uint32_t getMotionTriggers() { return std::get<int>(get(cfg_motionTriggers)); };
     bool getEnableNTP() { return std::get<bool>(get(cfg_enableNTP)); };
+    const char *getNTPServer() { return (std::get<configStr>(get(cfg_ntpServer)).str); };
     uint32_t getDoorUpdateAt() { return std::get<int>(get(cfg_doorUpdateAt)); };
     uint32_t getDoorOpenAt() { return std::get<int>(get(cfg_doorOpenAt)); };
     uint32_t getDoorCloseAt() { return std::get<int>(get(cfg_doorCloseAt)); };
@@ -203,27 +220,36 @@ public:
     uint32_t getDCDebounceDuration() { return std::get<int>(get(cfg_dcDebounceDuration)); };
     bool getObstFromStatus() { return std::get<bool>(get(cfg_obstFromStatus)); };
     uint32_t getBuiltInTTC() { return std::get<int>(get(cfg_builtInTTC)); };
+    bool getReverseOnStop() { return std::get<bool>(get(cfg_reverseOnStop)); };
+    bool getLightHomeKit() { return std::get<bool>(get(cfg_lightHomeKit)); };
+    bool getWpDisconnectOnTx() { return std::get<bool>(get(cfg_wpDisconnectOnTx)); };
+#ifdef RATGDO_ENCODER
+    bool getEncoderEnabled() { return std::get<bool>(get(cfg_encoderEnabled)); };
+    bool getEncoderReversed() { return std::get<bool>(get(cfg_encoderReversed)); };
+#endif
 #ifdef RATGDO32_DISCO
     uint32_t getVehicleThreshold() { return std::get<int>(get(cfg_vehicleThreshold)); };
     bool getLaserEnabled() { return std::get<bool>(get(cfg_laserEnabled)); };
     bool getLaserHomeKit() { return std::get<bool>(get(cfg_laserHomeKit)); };
+    bool getLaserOnDoorOpen() { return std::get<bool>(get(cfg_laserOnDoorOpen)); };
     bool getVehicleHomeKit() { return std::get<bool>(get(cfg_vehicleHomeKit)); };
     bool getVehicleOccupancyHomeKit() { return std::get<bool>(get(cfg_vehicleOccupancyHomeKit)); };
     bool getVehicleArrivingHomeKit() { return std::get<bool>(get(cfg_vehicleArrivingHomeKit)); };
     bool getVehicleDepartingHomeKit() { return std::get<bool>(get(cfg_vehicleDepartingHomeKit)); };
     uint32_t getAssistDuration() { return std::get<int>(get(cfg_assistDuration)); };
+    bool getTTCsound() { return std::get<bool>(get(cfg_TTCsound)); };
 #endif
 #ifndef ESP8266
+    bool getStopDoorHomeKit() { return std::get<bool>(get(cfg_stopDoorHomeKit)); };
     bool getUseSWserial() { return std::get<bool>(get(cfg_useSWserial)); };
     uint32_t getOccupancyDuration() { return std::get<int>(get(cfg_occupancyDuration)); };
     bool getEnableIPv6() { return std::get<bool>(get(cfg_enableIPv6)); };
     bool getEnableHomeSpanCLI() { return std::get<bool>(get(cfg_homespanCLI)); };
-    bool getLightHomeKit() { return std::get<bool>(get(cfg_lightHomeKit)); };
     bool getMotionHomeKit() { return std::get<bool>(get(cfg_motionHomeKit)); };
 #endif
 #ifdef USE_DHT22
-    int getDHT22Pin() { return contains(cfg_dht22Pin) ? std::get<int>(get(cfg_dht22Pin)) : -1; };
-    char *getDHT22TempFormat() { return contains(cfg_dht22TempFormat) ? std::get<configStr>(get(cfg_dht22TempFormat)).str : (char*)"C"; };
+    int getDHT22Pin() { return getDetail(cfg_dht22Pin) != nullptr ? std::get<int>(get(cfg_dht22Pin)) : -1; };
+    char *getDHT22TempFormat() { return getDetail(cfg_dht22TempFormat) != nullptr ? std::get<configStr>(get(cfg_dht22TempFormat)).str : (char*)"C"; };
 #endif
 };
 extern userSettings *userConfig;

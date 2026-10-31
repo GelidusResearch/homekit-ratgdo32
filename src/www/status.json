@@ -53,6 +53,7 @@
   "vehicleDist": 300,
   "laserEnabled": true,
   "laserHomeKit": true,
+  "laserOnDoorOpen": false,
   "vehicleHomeKit": true,
   "vehicleOccupancyHomeKit": true,
   "vehicleArrivingHomeKit": true,
@@ -67,12 +68,18 @@
   "closeDuration": 20,
   "dcOpenClose": false,
   "dcBypassTTC": false,
+  "reverseOnStop": true,
   "useToggle": true,
   "useSWserial": true,
   "TTClight": true,
+  "TTCsound": true,
   "obstFromStatus": true,
   "occupancyDuration": 300,
   "lightHomeKit": true,
   "motionHomeKit": true,
-  "garageSec1Emulated": false
+  "stopDoorHomeKit": false,
+  "garageSec1Emulated": false,
+  "encoderEnabled": false,
+  "encoderReversed": false,
+  "gdoFirmware": "0.00"
 }

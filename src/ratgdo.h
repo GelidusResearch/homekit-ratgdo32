@@ -56,6 +56,8 @@
 #define DRY_CONTACT_OPEN_PIN D5  // dry contact for open door limit switch
 #define DRY_CONTACT_CLOSE_PIN D6 // dry contact for close door limit switch
 #define DRY_CONTACT_LIGHT_PIN D3 // dry contact for light toggle switch
+#define DISCRETE_OPEN_PIN D0     // alternative (or in addition) to toggle, can use discrete open control
+#define DISCRETE_CLOSE_PIN D8    // alternative (or in addition) to toggle, can use discrete close control
 
 #ifndef LED_BUILTIN_ON_STATE
 #define LED_BUILTIN_ON_STATE LOW
@@ -125,23 +127,42 @@ const gpio_num_t DRY_CONTACT_CLOSE_PIN = (gpio_num_t)DRY_CONTACT_CLOSE_GPIO; // 
 #endif
 const gpio_num_t DRY_CONTACT_LIGHT_PIN = (gpio_num_t)DRY_CONTACT_LIGHT_GPIO; // toggle light
 #ifndef STATUS_DOOR_GPIO
+#if defined(GRGDO1_V1) || defined(GRGDO1_V2)
+#define STATUS_DOOR_GPIO GPIO_NUM_NC // GPIO26 is used by the Gelidus I2C bus
+#else
 #define STATUS_DOOR_GPIO GPIO_NUM_26
+#endif
 #endif
 const gpio_num_t STATUS_DOOR_PIN = (gpio_num_t)STATUS_DOOR_GPIO;
 #ifndef STATUS_OBST_GPIO
+#if defined(GRGDO1_V1) || defined(GRGDO1_V2)
+#define STATUS_OBST_GPIO GPIO_NUM_NC // GPIO25 is used by the Gelidus I2C bus
+#else
 #define STATUS_OBST_GPIO GPIO_NUM_25
+#endif
 #endif
 const gpio_num_t STATUS_OBST_PIN = (gpio_num_t)STATUS_OBST_GPIO;
 
-// !!! this is conflicting with above status pins
-#ifdef USE_GDOLIB
-const gpio_num_t DISCRETE_OPEN_PIN = GPIO_NUM_26;  // alternative (or in addition) to toggle, can use discrete open control
-const gpio_num_t DISCRETE_CLOSE_PIN = GPIO_NUM_25; // alternative (or in addition) to toggle, can use discrete close control
+// Shares GPIO with STATUS_DOOR_PIN / STATUS_OBST_PIN when in dry contact mode
+#ifndef DISCRETE_OPEN_GPIO
+#define DISCRETE_OPEN_GPIO STATUS_DOOR_GPIO
 #endif
+const gpio_num_t DISCRETE_OPEN_PIN = (gpio_num_t)DISCRETE_OPEN_GPIO; // alternative (or in addition) to toggle, can use discrete open control
+#ifndef DISCRETE_CLOSE_GPIO
+#define DISCRETE_CLOSE_GPIO STATUS_OBST_GPIO
+#endif
+const gpio_num_t DISCRETE_CLOSE_PIN = (gpio_num_t)DISCRETE_CLOSE_GPIO; // alternative (or in addition) to toggle, can use discrete close control
 
 #ifdef RATGDO32_DISCO
 const gpio_num_t BEEPER_PIN = GPIO_NUM_33;
-const gpio_num_t LASER_PIN = GPIO_NUM_23;
+#ifndef LASER_GPIO
+#if defined(GRGDO1_V1) || defined(GRGDO1_V2)
+#define LASER_GPIO GPIO_NUM_NC // GPIO23 is the Gelidus obstruction input
+#else
+#define LASER_GPIO GPIO_NUM_23
+#endif
+#endif
+const gpio_num_t LASER_PIN = (gpio_num_t)LASER_GPIO;
 #ifndef SENSOR_SDA_GPIO
 #define SENSOR_SDA_GPIO GPIO_NUM_19
 #endif
@@ -151,6 +172,21 @@ const gpio_num_t SENSOR_SDA_PIN = (gpio_num_t)SENSOR_SDA_GPIO;
 #endif
 const gpio_num_t SENSOR_SCL_PIN = (gpio_num_t)SENSOR_SCL_GPIO;
 const gpio_num_t SENSOR_SHUTDOWN_PIN = GPIO_NUM_32;
+#if defined(GRGDO1_V1) || defined(GRGDO1_V2)
+constexpr bool grgdo_output_pin_available(gpio_num_t pin)
+{
+    return pin < 0 || (pin != SENSOR_SDA_PIN && pin != SENSOR_SCL_PIN &&
+                       pin != INPUT_OBST_PIN && pin != UART_RX_PIN &&
+                       pin != UART_TX_PIN && pin != DRY_CONTACT_OPEN_PIN &&
+                       pin != DRY_CONTACT_CLOSE_PIN && pin != DRY_CONTACT_LIGHT_PIN &&
+                       pin != LED_BUILTIN);
+}
+static_assert(grgdo_output_pin_available(STATUS_DOOR_PIN), "Door status output overlaps a GRGDO1 input or I2C pin");
+static_assert(grgdo_output_pin_available(STATUS_OBST_PIN), "Obstruction status output overlaps a GRGDO1 input or I2C pin");
+static_assert(grgdo_output_pin_available(LASER_PIN), "Laser output overlaps a GRGDO1 input or I2C pin");
+static_assert(grgdo_output_pin_available(DISCRETE_OPEN_PIN), "Discrete open output overlaps a GRGDO1 input or I2C pin");
+static_assert(grgdo_output_pin_available(DISCRETE_CLOSE_PIN), "Discrete close output overlaps a GRGDO1 input or I2C pin");
+#endif
 #endif
 
 enum GarageDoorCurrentState : uint8_t
@@ -183,6 +219,44 @@ enum LockTargetState : uint8_t
     TGT_LOCKED = Characteristic::LockTargetState::LOCK,
 };
 #endif
+
+// A disconnected output must never reconfigure a board's I2C or obstruction pins.
+inline void write_status_pin(int pin, uint8_t state)
+{
+    if (pin >= 0)
+        digitalWrite(pin, state);
+}
+
+inline void setup_status_pin(int pin)
+{
+    if (pin >= 0)
+    {
+#ifdef ESP32
+        gpio_set_level(static_cast<gpio_num_t>(pin), 0);
+#else
+        digitalWrite(pin, LOW);
+#endif
+        pinMode(pin, OUTPUT);
+    }
+}
+
+inline void configure_dry_contact_output(int pin)
+{
+    if (pin < 0)
+        return;
+#ifdef ESP32
+    gpio_set_level(static_cast<gpio_num_t>(pin), 0);
+    gpio_config_t config = {
+        .pin_bit_mask = (1ULL << pin),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE};
+    gpio_config(&config);
+#endif
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+}
 
 #define DOOR_STATE(s) (s == 0) ? "Open" : (s == 1) ? "Closed"  \
                                       : (s == 2)   ? "Opening" \
@@ -237,6 +311,12 @@ struct __attribute__((aligned(4))) GarageDoor
     _millis_t room_occupancy_timeout;
     bool room_occupied;
 #endif
+#ifdef RATGDO_ENCODER
+    bool manuallyOperated;
+    GarageDoorCurrentState protocol_door_state;
+    GarageDoorCurrentState encoder_door_state;
+    uint32_t encoder_door_position; // 0 = closed, 100 = fully open, anything else implies unknown.
+#endif
 };
 extern GarageDoor garage_door;
 extern GarageDoor last_reported_garage_door;
@@ -245,8 +325,6 @@ extern GarageDoor last_reported_garage_door;
 #ifdef ESP8266
 #define STATUS_JSON_BUFFER_SIZE (256 * 8)
 #else
-#define STATUS_JSON_BUFFER_SIZE (256 * 10)
+#define STATUS_JSON_BUFFER_SIZE (256 * 12)
 #endif
-#define LOOP_JSON_BUFFER_SIZE 512
 extern char *status_json;
-extern char *loop_json;

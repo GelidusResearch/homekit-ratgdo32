@@ -145,6 +145,7 @@
               <td colspan="2">Door State:</td>
               <td>
                 <span id="garageDoorState"></span><span id="ttcActive" style="display: none;">&nbsp;in&nbsp;99</span>
+                <span id="manuallyOperated" style="display: none; font-size: 0.6em;">&nbsp;(manual)</span>
               </td>
               <td colspan="3">Obstruction:</td>
               <td>
@@ -222,7 +223,7 @@
               <tr>
                 <td class="label">Username:</td>
                 <td>
-                  <input id="newUserName" type="text" placeholder="admin" maxlength="30" minlength="1">
+                  <input id="newUserName" type="text" placeholder="admin" autocomplete="username" maxlength="30" minlength="1">
                 </td>
                 <td></td>
               </tr>
@@ -236,7 +237,7 @@
               <tr>
                 <td class="label">Confirm:</td>
                 <td>
-                  <input id="confirmPassword" type="password" placeholder="confirm new password">
+                  <input id="confirmPassword" type="password" placeholder="confirm new password" autocomplete="new-password">
                 </td>
                 <td>&nbsp;&nbsp;&nbsp;
                   <input type="button" value="Save User/Password" onclick="changePassword()">
@@ -364,6 +365,15 @@
                     href="https://www.law.cornell.edu/cfr/text/16/1211.14" target="_blank">WARNING</a></span>
                 </td>
               </tr>
+              <tr id="TTCsoundRow" style="display:none;">
+                <td></td>
+                <td>
+                  <input type="checkbox" id="TTCsound" name="TTCsound" checked>
+                  <label for="TTCsound">Beep during time-to-close</label>&nbsp;<a id="TTCwarning3"
+                    style="display: none; color: red; font-size: 0.8em"
+                    href="https://www.law.cornell.edu/cfr/text/16/1211.14" target="_blank">WARNING</a></span>
+                </td>
+              </tr>
               <tr id="builtInTTCrow">
                 <td class="label">Automatic Close:</td>
                 <td>
@@ -376,13 +386,27 @@
                 </td>
               </tr>
               <tr>
+                <td class="label">Reverse on Stop:</td>
+                <td>
+                  <input type="checkbox" id="reverseOnStop" name="reverseOnStop" value="yes" checked>
+                  <label for="reverseOnStop">Automatically reverse door on stop</label>
+                </td>
+              </tr>
+              <tr id="homekitStopDoorRow" style="display: none;">
+                <td class="label">Stop button:</td>
+                <td>
+                  <input type="checkbox" id="stopDoorHomeKit" name="stopDoorHomeKit" value="no" checked>
+                  <label for="stopDoorHomeKit">HomeKit door stop button</label>
+                </td>
+              </tr>
+              <tr>
                 <td colspan="2">&nbsp;</td>
               </tr>
               <tr id="homekitLightRow" style="display: none;">
                 <td class="label">Light:</td>
                 <td>
-                  <input type="checkbox" id="homekitLight" name="homekitLight" value="no" checked>
-                  <label for="homekitLight">HomeKit Light Switch</label>
+                  <input type="checkbox" id="lightHomeKit" name="lightHomeKit" value="no" checked>
+                  <label for="lightHomeKit">HomeKit Light Switch</label>
                 </td>
               <tr>
                 <td class="label">Motion Triggers:</td>
@@ -464,6 +488,13 @@
                   <label for="laserHomeKit">HomeKit Light Switch</label>
                 </td>
               </tr>
+              <tr id="laserOnDoorOpenRow" style="display:none;">
+                <td></td>
+                <td>
+                  <input type="checkbox" id="laserOnDoorOpen" name="laserOnDoorOpen" value="no" disabled>
+                  <label for="laserOnDoorOpen">Trigger on Door Open</label>
+                </td>
+              </tr>
               <tr>
                 <td></td>
                 <td>
@@ -539,10 +570,18 @@
                   <label for="useToggle">Use Sec+2.0 toggle instead of close command</label>
                 </td>
               </tr>
+              <tr id="wpDisconnectOnTxRow">
+                <td></td>
+                <td>
+                  <input type="checkbox" id="wpDisconnectOnTx" name="wpDisconnectOnTx" value="no">
+                  <label for="wpDisconnectOnTx">Enable Sec+1.0 Digital WP Disconnect on TX</label>
+                </td>
+              </tr>
               <tr id="dcOpenCloseRow">
                 <td></td>
                 <td>
-                  <input type="checkbox" id="dcOpenClose" name="dcOpenClose" value="no" onclick="toggleHardwiredBypassRow()">
+                  <input type="checkbox" id="dcOpenClose" name="dcOpenClose" value="no"
+                    onclick="toggleHardwiredBypassRow()">
                   <label for="dcOpenClose">Enable hardwired open/close/light control</label>
                 </td>
               </tr>
@@ -565,6 +604,35 @@
                 <td>
                   <input type="checkbox" id="obstFromStatus" name="obstFromStatus" value="no">
                   <label for="obstFromStatus">Get obstruction from GDO status messages</label>
+                </td>
+              </tr>
+              <tr id="encoderRow" style="display: none;">
+                <td></td>
+                <td>
+                  <input type="checkbox" id="encoderEnabled" name="encoderEnabled" onclick="toggleEncoderOptions()">
+                  <label for="encoderEnabled">Enable rotary encoder</label>
+                </td>
+              </tr>
+              <tr id="encoderReversedRow" style="display: none;">
+                <td></td>
+                <td>&nbsp;
+                  <input type="checkbox" id="encoderReversed" name="encoderReversed">
+                  <label for="encoderReversed">Reverse encoder direction</label>
+                </td>
+              </tr>
+              <tr id="encStepsRow" style="display: none;">
+                <td></td>
+                <td>
+                  <table class="settings">
+                    <tr>
+                      <td class="IPlabel">&nbsp;Steps:</td>
+                      <td>
+                        <span id="encSteps">--</span>
+                        <input type="button" id="resetEncoderCalBtn" value="Reset Calibration"
+                          onclick="resetEncoderCal()">
+                      </td>
+                    </tr>
+                  </table>
                 </td>
               </tr>
               <tr id="trWifiPhyMode" style="display: none">
@@ -647,6 +715,12 @@
                 <td></td>
                 <td>
                   <table class="settings">
+                    <tr id="ntpServerRow">
+                      <td class="IPlabel">NTP Server:</td>
+                      <td>
+                        <input type="text" class="TZinput" id="ntpServer" name="ntpServer" maxlength="63">
+                      </td>
+                    </tr>
                     <tr id="timeZoneRow">
                       <td class="IPlabel">Time Zone:</td>
                       <td>
@@ -736,6 +810,10 @@
             <td colspan="2" style="padding: 0px;">lastReboot:&nbsp;</td>
             <td colspan="4" style="padding: 0px;" id="lastRebootAt"></td>
           </tr>
+          <tr id="gdoFirmwareRow">
+            <td colspan="2" style="padding: 0px;">GDO Firmware:&nbsp;</td>
+            <td colspan="4" style="padding: 0px;" id="gdoFirmware"></td>
+          </tr>
         </table>
         <p style="margin:0px; padding-top:4px">
           <a href="logs.html?v=CRC-32" target="_blank">Show system logs</a>&nbsp;(crashCount:&nbsp;<span
@@ -778,6 +856,29 @@
         <span id="updatePercent" style="display:none;"></span><span id="dotdot3"></span>
         <br><br>
       </div>
+    </div>
+  </div>
+
+  <div id="passwordModal" class="modal">
+    <div class="modal-content" style="width: fit-content;">
+      <form id="passwordForm">
+        <h3>Authentication required</h3>
+        <table style="width: 100%;">
+          <tr>
+            <td style="text-align: right; font-size: 0.8em;"><label for="authUsername">Username:</label></td>
+            <td style="text-align: left; font-size: 0.8em;"><input id="authUsername" type="text" autocomplete="username" required></td>
+          </tr>
+          <tr>
+            <td style="text-align: right; font-size: 0.8em;"><label for="authPassword">Password:</label></td>
+            <td style="text-align: left; font-size: 0.8em;"><input id="authPassword" type="password" autocomplete="current-password" required></td>
+          </tr>
+        </table>
+        <br>
+        <span style="display: block; text-align: center;">
+          <input id="passwordCancel" type="button" value="Cancel">
+          <input type="submit" value="Sign in">
+        </span>
+      </form>
     </div>
   </div>
 
@@ -910,6 +1011,9 @@
     };
     document.getElementById("TTClight").onclick = function () {
       document.getElementById("TTCwarning2").style.display = (this.checked) ? "none" : "inline";
+    };
+    document.getElementById("TTCsound").onclick = function () {
+      document.getElementById("TTCwarning3").style.display = (this.checked) ? "none" : "inline";
     };
 
     // Automatic close slider

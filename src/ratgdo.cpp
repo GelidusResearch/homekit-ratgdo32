@@ -23,12 +23,14 @@
 #include <LittleFS.h>
 #else
 #include <esp_core_dump.h>
+#include <esp_system.h>
 #include <esp_log.h>
 #include <ping/ping_sock.h>
 #endif
 
 // RATGDO project includes
 #include "ratgdo.h"
+#include "runtime_diagnostics.h"
 #include "config.h"
 #include "comms.h"
 #include "homekit.h"
@@ -44,6 +46,9 @@
 #endif
 #ifndef USE_GDOLIB
 #include "drycontact.h"
+#endif
+#ifdef RATGDO_ENCODER
+#include "encoder.h"
 #endif
 
 // Logger tag
@@ -76,6 +81,16 @@ GarageDoor garage_door = {
     .builtInTTC = 0,
     .builtInTTCremaining = 0,
     .builtInTTChold = false,
+#ifndef ESP8266
+    .room_occupancy_timeout = 0,
+    .room_occupied = false,
+#endif
+#ifdef RATGDO_ENCODER
+    .manuallyOperated = false,
+    .protocol_door_state = (GarageDoorCurrentState)0xFF,
+    .encoder_door_state = (GarageDoorCurrentState)0xFF,
+    .encoder_door_position = 0xFF, // unknown
+#endif
 };
 
 // Some initialization is postponed until after we have an IP address
@@ -114,7 +129,6 @@ _millis_t next_heap_check = 0;
 
 // Buffer to hold our status as JSON string
 char *status_json = NULL;
-char *loop_json = NULL;
 
 // Forward declare functions
 bool suspend_service_loop = false;
@@ -138,6 +152,13 @@ static void ping_stop();
  */
 void setup()
 {
+#ifdef ESP32
+    // Hold the bus inactive before network/HomeKit initialization, and cover
+    // restart paths owned by libraries as well as sync_and_restart().
+    quiesce_gdo_tx();
+    if (esp_register_shutdown_handler(quiesce_gdo_tx) != ESP_OK)
+        ESP_LOGE(TAG, "Could not register GDO transmitter shutdown handler");
+#endif
     free_heap_at_boot = ESP.getFreeHeap();
 #ifdef ESP8266
     // Arduino memory optimization moves the user (cont) stack (4K in size) to overlap the bottom
@@ -229,14 +250,6 @@ void setup()
         return;
     }
     ESP_LOGI(TAG, "Allocated buffer for status JSON, size: %d", STATUS_JSON_BUFFER_SIZE);
-
-    loop_json = static_cast<char *>(malloc(LOOP_JSON_BUFFER_SIZE));
-    if (!loop_json)
-    {
-        ESP_LOGE(TAG, "Failed to allocated buffer for loop JSON, size: %d", LOOP_JSON_BUFFER_SIZE);
-        return;
-    }
-    ESP_LOGI(TAG, "Allocated buffer for loop JSON, size: %d", LOOP_JSON_BUFFER_SIZE);
     IRAM_END(TAG);
 
     if (softAPmode)
@@ -276,6 +289,9 @@ void setup()
 #ifndef USE_GDOLIB
     setup_drycontact();
 #endif
+#ifdef RATGDO_ENCODER
+    setup_encoder();
+#endif
 
     // Finally initialize WiFi and HomeKit
 #ifdef ESP8266
@@ -288,6 +304,7 @@ void setup()
     ESP_LOGI(TAG, "=== WAITING for IP address before continuing initialization");
     // led to idle mode
     led.idle();
+    runtime_diagnostics_setup();
 }
 
 /****************************************************************************
@@ -295,6 +312,7 @@ void setup()
  */
 void loop()
 {
+    runtime_diagnostics_phase(1);
     static bool setup_after_IP_done = false;
 
     // Some initialization is postponed until after we have an IP address
@@ -333,7 +351,7 @@ void loop()
         ESP_LOGI(TAG, "Free sys stack at boot:     %d", free_sys_stack_at_boot);
         ESP_LOGI(TAG, "Current minimum sys stack:  %d", free_sys_stack);
 #endif
-        if (doorControlType == 2)
+        if (doorControlType == DOOR_CONTROL_SEC_PLUS_V2)
         {
             ESP_LOGI(TAG, "Our ID code %lu (0x%02lX)", id_code, id_code);
             ESP_LOGI(TAG, "Our rolling code %lu (0x%02X)", rolling_code, rolling_code);
@@ -350,9 +368,13 @@ void loop()
 #endif
     }
 
+    runtime_diagnostics_phase(2);
     comms_loop();
 #ifndef USE_GDOLIB
     drycontact_loop();
+#endif
+#ifdef RATGDO_ENCODER
+    encoder_loop();
 #endif
 #ifdef ESP8266
     // On ESP8266 we handle WiFi and HomeKit ourselves
@@ -362,10 +384,15 @@ void loop()
 #ifdef RATGDO32_DISCO
     vehicle_loop();
 #endif
+    runtime_diagnostics_phase(3);
     web_loop();
+    runtime_diagnostics_phase(4);
     improv_loop();
+    runtime_diagnostics_phase(5);
     soft_ap_loop();
+    runtime_diagnostics_phase(6);
     service_timer_loop();
+    runtime_diagnostics_phase(0);
 }
 
 /****************************************************************************
@@ -374,7 +401,7 @@ void loop()
 void service_timer_loop()
 {
     _millis_t current_millis = _millis();
-    static time_t lastSNTP = 0;
+    static time_t lastTimeLogged = 0;
     static _millis_t lastLEDblink = 0;
 
     if (current_millis - lastLEDblink >= LED_BLINK_INTERVAL)
@@ -397,15 +424,15 @@ void service_timer_loop()
 
     if (enableNTP && clockSet)
     {
-        if (clockSet != lastSNTP)
+        time_t timeNow = time(NULL);
+        if (timeNow - lastTimeLogged > 60 * 60 * 3) // log time every 3 hours
         {
-            lastSNTP = clockSet;
+            lastTimeLogged = timeNow;
             ESP_LOGI(TAG, "Current System time: %s", timeString());
         }
 
         if (lastRebootAt == 0)
         {
-            time_t timeNow = time(NULL);
             lastRebootAt = timeNow - (current_millis / 1000);
             ESP_LOGI(TAG, "System boot time:    %s", timeString(lastRebootAt));
             // Need to also set when last door open/close was

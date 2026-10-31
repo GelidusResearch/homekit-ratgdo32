@@ -1,149 +1,173 @@
-name: Release
+name: Firmware
 
 on:
-  release:
-    types: [published]
-  workflow_dispatch:
+  pull_request:
   push:
-    tags:
-      - 'v*'
+    branches: [main, integrate-mother-main, fix/issue19-focused]
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build (must match VERSION)
+        required: true
+        type: string
+      publish:
+        description: Publish release and update the web installer
+        default: false
+        type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
+  metadata:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      ref: ${{ steps.version.outputs.ref }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.sha }}
+      - name: Validate version and release ref
+        id: version
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          VERSION=$(tr -d '\r\n' < VERSION)
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          TAG="v${VERSION}"
+          PUBLISH=false
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            test "${GITHUB_REF#refs/tags/}" = "$TAG"
+            PUBLISH=true
+          elif [[ "$EVENT" == workflow_dispatch ]]; then
+            test "$INPUT_TAG" = "$TAG"
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            test "$(git rev-parse HEAD)" = "$(git rev-parse "$TAG^{commit}")"
+            PUBLISH="${INPUT_PUBLISH:-false}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "ref=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+
   build:
-    name: Build Firmware
+    name: Build ${{ matrix.environment }}
+    needs: metadata
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         environment: [ratgdo_esp32dev, ratgdo_esp32dev_rev1]
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-            submodules: true
-
-      - name: Set Tag
-        id: tag
-        run: echo "latestTag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Set Revision Name
-        id: rev
-        run: |
-          if [ "${{ matrix.environment }}" = "ratgdo_esp32dev" ]; then
-            echo "name=rev2" >> $GITHUB_OUTPUT
-          else
-            echo "name=rev1" >> $GITHUB_OUTPUT
-          fi
-
+          ref: ${{ needs.metadata.outputs.ref }}
+          submodules: true
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.13'
-  
+          python-version: '3.12'
+      - name: Check release tooling and web JavaScript
+        run: |
+          python -m unittest discover -s tests -v
+          node --check src/www/functions.js
+          node --check src/www/logs.js
+          node --test tests/firmware-selection.test.cjs
+          node --test tests/logs-sse-recovery.test.cjs
+          c++ -std=c++17 -Wall -Wextra -Isrc tests/json_float.cpp -o /tmp/json-test
+          /tmp/json-test
+          c++ -std=c++17 -Wall -Wextra -Isrc tests/gdo_uart.cpp -o /tmp/uart-test
+          /tmp/uart-test
+          c++ -std=c++17 -Wall -Wextra -Isrc tests/serial_console.cpp -o /tmp/console-test
+          /tmp/console-test
       - name: Install PlatformIO Core
-        run: |
-            pip install --upgrade pip
-            pip install --upgrade platformio
-
-      - name: Build PlatformIO Project
+        run: pip install platformio==6.2.0
+      - name: Build firmware
         run: pio run -e ${{ matrix.environment }}
-
-      - name: Prepare Artifacts
+      - name: Check panic transmitter disconnect
         run: |
-          TAG=${{ steps.tag.outputs.latestTag }}
-          REV=${{ steps.rev.outputs.name }}
-          cd .pio/build/${{ matrix.environment }}
-          md5sum firmware.bin | awk '{print $1}' > homekit-grgdo1-${REV}-${TAG}.firmware.md5
-          cp firmware.bin homekit-grgdo1-${REV}-${TAG}.firmware.bin
-          cp bootloader.bin homekit-grgdo1-${REV}-${TAG}.bootloader.bin
-          cp partitions.bin homekit-grgdo1-${REV}-${TAG}.partitions.bin
-          cp firmware.elf homekit-grgdo1-${REV}-${TAG}.elf
-
-      - name: Upload Build Artifacts
-        uses: actions/upload-artifact@v4
+          python scripts/check_uart_iram.py --elf .pio/build/${{ matrix.environment }}/firmware.elf \
+            --toolchain "$HOME/.platformio/packages/toolchain-xtensa-esp-elf"
+      - name: Package exact build artifacts
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+          ENVIRONMENT: ${{ matrix.environment }}
+        run: |
+          python scripts/release_assets.py package --environment "$ENVIRONMENT" --tag "$TAG" \
+            --boot-app0 "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions/boot_app0.bin"
+          pio pkg list -e "$ENVIRONMENT" > release_assets/dependencies-$ENVIRONMENT.txt
+          git rev-parse HEAD > release_assets/commit-$ENVIRONMENT.txt
+          cd release_assets
+          sha256sum * > SHA256SUMS-$ENVIRONMENT
+      - uses: actions/upload-artifact@v4
         with:
-          name: build-${{ steps.rev.outputs.name }}
-          path: .pio/build/${{ matrix.environment }}/homekit-grgdo1-*
+          name: build-${{ matrix.environment }}
+          path: release_assets/*
+          if-no-files-found: error
 
   release:
-    name: Publish Release
-    needs: build
+    name: Publish release and installer
+    needs: [metadata, build]
+    if: needs.metadata.outputs.publish == 'true' && github.repository == 'GelidusResearch/homekit-ratgdo32'
     runs-on: ubuntu-latest
+    concurrency:
+      group: publish-firmware
+      cancel-in-progress: false
     permissions:
       contents: write
-    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
-            fetch-depth: 0
-            ref: merge-upstream-v3.4.3 # Ensure we are on a branch, not detached HEAD
-
-      - name: Set Tag
-        id: tag
-        run: echo "latestTag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v4
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
         with:
-          path: artifacts
-
-      - name: Organize Artifacts
+          pattern: build-*
+          path: release_assets
+          merge-multiple: true
+      - name: Verify artifacts and update installer
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
+          BUILD_COMMIT: ${{ needs.metadata.outputs.ref }}
         run: |
-          mkdir -p release_assets
-          # Move files from subdirectories (build-rev1, build-rev2) to a single folder
-          cp artifacts/build-rev1/* release_assets/
-          cp artifacts/build-rev2/* release_assets/
-          ls -l release_assets/
-
-      - name: Update Manifests and Sync to Docs
+          set -euo pipefail
+          # A release must come from the main branch, and must not downgrade it.
+          git merge-base --is-ancestor "$BUILD_COMMIT" HEAD
+          test "v$(tr -d '\r\n' < VERSION)" = "$TAG"
+          test "$(cat release_assets/commit-ratgdo_esp32dev.txt)" = "$BUILD_COMMIT"
+          test "$(cat release_assets/commit-ratgdo_esp32dev_rev1.txt)" = "$BUILD_COMMIT"
+          (cd release_assets && sha256sum -c SHA256SUMS-ratgdo_esp32dev && sha256sum -c SHA256SUMS-ratgdo_esp32dev_rev1)
+          python scripts/release_assets.py update-docs --tag "$TAG"
+          # Extract only this Gelidus release's notes.
+          python - "$TAG" <<'PYNOTES'
+          import pathlib, sys
+          text = pathlib.Path('CHANGELOG.md').read_text()
+          heading = '## ' + sys.argv[1] + ' '
+          section = text[text.index(heading):].split('\n## ', 1)[0]
+          pathlib.Path('release-notes.md').write_text(section)
+          PYNOTES
+      - name: Commit installer files
+        env:
+          TAG: ${{ needs.metadata.outputs.tag }}
         run: |
-          TAG=${{ steps.tag.outputs.latestTag }}
-          mkdir -p docs/firmware
-          
-          # Copy binaries to docs/firmware
-          cp release_assets/* docs/firmware/
-          
-          # Update manifest-rev1.json
-          REV="rev1"
-          jq ".version = \"${TAG}\" | 
-              .builds[0].parts[0].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.bootloader.bin\" |
-              .builds[0].parts[1].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.partitions.bin\" |
-              .builds[0].parts[3].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.firmware.bin\"" \
-              docs/manifest-${REV}.json > temp.json && mv temp.json docs/manifest-${REV}.json
-
-          # Update manifest-rev2.json
-          REV="rev2"
-          jq ".version = \"${TAG}\" | 
-              .builds[0].parts[0].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.bootloader.bin\" |
-              .builds[0].parts[1].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.partitions.bin\" |
-              .builds[0].parts[3].path = \"firmware/homekit-grgdo1-${REV}-${TAG}.firmware.bin\"" \
-              docs/manifest-${REV}.json > temp.json && mv temp.json docs/manifest-${REV}.json
-
-          # Update main manifest.json (Rev2 is default)
-          jq ".version = \"${TAG}\" | 
-              .builds[0].parts[0].path = \"firmware/homekit-grgdo1-rev2-${TAG}.bootloader.bin\" |
-              .builds[0].parts[1].path = \"firmware/homekit-grgdo1-rev2-${TAG}.partitions.bin\" |
-              .builds[0].parts[3].path = \"firmware/homekit-grgdo1-rev2-${TAG}.firmware.bin\"" \
-              docs/manifest.json > temp.json && mv temp.json docs/manifest.json
-
-      - name: Commit and Push Docs
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "Update docs/firmware and manifests for release ${{ steps.tag.outputs.latestTag }}"
-          file_pattern: 'docs/'
-          push_options: '--force'
-          branch: merge-upstream-v3.4.3
-
-      - name: Create Release
-        uses: softprops/action-gh-release@v1
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/firmware docs/manifest*.json
+          if ! git diff --cached --quiet; then
+            git commit -m "Update GRGDO1 installer for $TAG"
+            git push origin "HEAD:${{ github.event.repository.default_branch }}"
+          fi
+      - uses: softprops/action-gh-release@v2
         with:
           files: release_assets/*
-          tag_name: ${{ steps.tag.outputs.latestTag }}
-          name: Release ${{ steps.tag.outputs.latestTag }}
+          fail_on_unmatched_files: true
+          tag_name: ${{ needs.metadata.outputs.tag }}
+          name: GRGDO1 ${{ needs.metadata.outputs.tag }}
+          body_path: release-notes.md
           draft: false
           prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
