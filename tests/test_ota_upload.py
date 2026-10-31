@@ -224,6 +224,9 @@ int main() {
     server.arguments["size"]="99999999"; Update.beginOk=false;
     start(); event(UPLOAD_FILE_END);
     assert(!otaRecoveryPending && commsRunning && vehicle_setup_done && !suspend_service_loop);
+    // Each request owns its hash; an omitted hash cannot reuse the previous one.
+    server.arguments["md5"]="";
+    start(true); assert(firmwareMD5[0]=='\0'); event(UPLOAD_FILE_END);
 }
 '''
         with tempfile.TemporaryDirectory() as temporary:

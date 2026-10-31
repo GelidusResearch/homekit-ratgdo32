@@ -2523,13 +2523,10 @@ void handle_firmware_upload()
         ESP_LOGI(TAG, "Update: %s", upload.filename.c_str());
         verify = !strcmp(server.arg("action").c_str(), "verify");
         size = atoi(server.arg("size").c_str());
-        // arg() returns a String by value; keep it alive until the hash is copied.
-        const String md5 = server.arg("md5");
-
         // We are updating.  If size and MD5 provided, save them
         firmwareSize = size;
-        if (md5.length() > 0)
-            strlcpy(firmwareMD5, md5.c_str(), sizeof(firmwareMD5));
+        // arg()'s temporary remains alive through this complete copy expression.
+        strlcpy(firmwareMD5, server.arg("md5").c_str(), sizeof(firmwareMD5));
 
         uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
         ESP_LOGI(TAG, "Available space for upload: %lu", maxSketchSpace);
