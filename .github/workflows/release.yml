@@ -3,7 +3,7 @@ name: Firmware
 on:
   pull_request:
   push:
-    branches: [main, integrate-mother-main]
+    branches: [main, integrate-mother-main, fix/issue19-focused]
     tags: ['v*']
   workflow_dispatch:
     inputs:
@@ -76,7 +76,8 @@ jobs:
           python -m unittest discover -s tests -v
           node --check src/www/functions.js
           node --check src/www/logs.js
-          node --test tests/firmware-selection.test.cjs tests/wifi-scan-polling.test.cjs
+          node --test tests/firmware-selection.test.cjs
+          node --test tests/logs-sse-recovery.test.cjs
           c++ -std=c++17 -Wall -Wextra -Isrc tests/json_float.cpp -o /tmp/json-test
           /tmp/json-test
           c++ -std=c++17 -Wall -Wextra -Isrc tests/gdo_uart.cpp -o /tmp/uart-test
@@ -87,12 +88,6 @@ jobs:
         run: pip install platformio==6.2.0
       - name: Build firmware
         run: pio run -e ${{ matrix.environment }}
-      - name: Test installed SDK multipart parser
-        run: python tests/test_webserver_multipart.py --source "$HOME/.platformio/packages/framework-arduinoespressif32/libraries/WebServer/src/Parsing.cpp"
-      - name: Test installed HomeSpan transport
-        run: |
-          python .pio/libdeps/${{ matrix.environment }}/HomeSpan/tests/test_hap_output.py
-          python .pio/libdeps/${{ matrix.environment }}/HomeSpan/tests/test_hap_input.py
       - name: Check panic transmitter disconnect
         run: |
           python scripts/check_uart_iram.py --elf .pio/build/${{ matrix.environment }}/firmware.elf \

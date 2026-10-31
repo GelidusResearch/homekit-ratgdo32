@@ -168,12 +168,7 @@ std::vector<std::string> getLocalUrl()
 
 void getAvailableWifiNetworks()
 {
-    WifiScanResults results;
-    if (!results.scan())
-    {
-        set_error(improv::ERROR_UNKNOWN);
-        return;
-    }
+    wifi_scan();
     String currentSSID = "";
     for (wifiNet_t net : wifiNets)
     {

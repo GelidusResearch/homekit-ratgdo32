@@ -16,7 +16,6 @@
 
 // C/C++ language includes
 #include <string>
-#include <new>
 #include <tuple>
 #include <unordered_map>
 #include <time.h>
@@ -111,7 +110,6 @@ void add_dynamic_mdns();
 
 #if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
 bool retainedBySSE(int fd);
-bool drainRetiredSSE();
 #endif
 
 #if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT) && defined(RATGDO_RUNTIME_DIAGNOSTICS)
@@ -144,28 +142,9 @@ const std::unordered_map<std::string, std::pair<const HTTPMethod, void (*)()>> b
 #endif
     {"/rest/events/subscribe", {HTTP_GET, handle_subscribe}}};
 
-static char writeBuffer[512];
-
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-namespace { size_t httpResponseWrite(NetworkClient &, const uint8_t *, size_t); }
-class OwnedWebServer : public WebServer
-{
-public:
-    using WebServer::WebServer;
-protected:
-    size_t _currentClientWrite(const char *data, size_t length) override
-    { return httpResponseWrite(_currentClient, reinterpret_cast<const uint8_t *>(data), length); }
-    size_t _currentClientWrite_P(PGM_P data, size_t length) override
-    { return httpResponseWrite(_currentClient, reinterpret_cast<const uint8_t *>(data), length); }
-};
-#endif
-
 // Declare web server on HTTP port 80.
 #ifdef ESP8266
 ESP8266WebServer server(80);
-#elif defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-static OwnedWebServer ownedServer(80);
-WebServer &server = ownedServer;
 #else
 WebServer server(80);
 #endif
@@ -173,56 +152,35 @@ WebServer server(80);
 #if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
 // Experimental pinned-SDK lifecycle: retain only ordinary HTTP response owners
 // until ACK completion, or abort their verified attached PCB after no progress.
-// Response writes use supported WebServer hooks so SDK write failures cannot
-// invalidate the retained shared socket before verified retirement.
+// This does not interrupt a NetworkClient::write blocked inside a handler.
 namespace {
 constexpr unsigned HTTP_OWNED_SLOTS = 2;
 constexpr uint32_t HTTP_OWNED_POLL_MS = HTTP_MAX_SEND_WAIT / 20;
-constexpr uint32_t HTTP_BODY_MAX_LIFETIME_MS = HTTP_MAX_SEND_WAIT;
 enum class HttpOwnedState { Empty, Active, Release, Aborted, Quarantined };
-enum class HttpBody { None, Flash, MessageLog, DiagnosticLog, Generated };
 struct HttpOwnedResponse {
     NetworkClient owner;
     HttpOwnedState state = HttpOwnedState::Empty;
     int fd = -1;
-    uint32_t generation = 0, lastAck = 0, lastProgress = 0, retained = 0;
+    uint32_t generation = 0, lastAck = 0, retained = 0;
     struct netconn *connection = nullptr;
     struct tcp_pcb *pcb = nullptr;
     ip_addr_t localIP{}, remoteIP{};
     uint16_t localPort = 0, remotePort = 0;
     bool initialized = false, reported = false;
     bool discardQueued = false;
-    bool writeFailed = false;
-    HttpBody body = HttpBody::None;
-    const uint8_t *bodyData = nullptr;
-    size_t bodyLength = 0, bodyOffset = 0;
-    uint32_t bodyStarted = 0;
-    size_t (*bodyReader)(uint8_t *, size_t) = nullptr;
-    void (*bodyCleanup)() = nullptr;
-    LOG::MessageCursor logCursor;
-    LOG::DiagnosticCursor diagnosticCursor;
+    _millis_t lastProgress = 0;
 };
-// Main-only: release a generated body's scan lease on every retirement path.
-void finishHttpBody(HttpOwnedResponse &entry)
-{
-    if (entry.bodyCleanup)
-        entry.bodyCleanup();
-    entry.bodyCleanup = nullptr;
-    entry.bodyReader = nullptr;
-    entry.body = HttpBody::None;
-}
-
 struct HttpOwnedCounters {
     uint32_t tracked = 0, released = 0, aborted = 0, quarantined = 0;
     uint32_t postFailures = 0, maximumRetainedPayload = 0;
 };
 HttpOwnedResponse httpOwned[HTTP_OWNED_SLOTS];
 HttpOwnedCounters httpOwnedCounters;
-HttpOwnedResponse *httpWriting = nullptr; // Main-only request writer context.
 struct tcpip_callback_msg *httpOwnedMessage = nullptr;
 std::atomic<bool> httpOwnedDone{false};
 bool httpOwnedPending = false;
-uint32_t httpOwnedNow = 0, httpOwnedPolledAt = 0, httpOwnedPayload = 0;
+_millis_t httpOwnedNow = 0, httpOwnedPolledAt = 0;
+uint32_t httpOwnedPayload = 0;
 // Main-only evidence: never read callback-owned entries/payload from a handler.
 uint32_t httpOwnedCurrentPayload = 0, httpOwnedLastPayload = 0;
 #ifdef RATGDO_RUNTIME_DIAGNOSTICS
@@ -318,7 +276,7 @@ void httpOwnedInspect(void *)
         truncated = truncated || segment != nullptr;
         entry.retained = retained;
         total += retained;
-        if (!truncated && retained == 0 && entry.body == HttpBody::None)
+        if (!truncated && retained == 0)
         {
             // Payload is acknowledged. Full socket close detaches netconn
             // normally; any FIN-only metadata remains under SDK management.
@@ -334,7 +292,7 @@ void httpOwnedInspect(void *)
         // immediately after verifying ownership, rather than retaining up to
         // eight send buffers through serial HTTP timeout windows.
         if ((entry.discardQueued && (retained != 0 || truncated)) ||
-            (!truncated && static_cast<uint32_t>(httpOwnedNow - entry.lastProgress) >= HTTP_MAX_SEND_WAIT))
+            (!truncated && httpOwnedNow - entry.lastProgress >= HTTP_MAX_SEND_WAIT))
         {
             // tcp_abort frees queues/PCB and invokes the original netconn
             // err_tcp callback. Never dereference pcb after this call.
@@ -378,7 +336,6 @@ bool httpOwnedPoll()
                 if (currentFD == -1)
                 {
                     entry.owner.stop();
-                    finishHttpBody(entry);
                     entry = HttpOwnedResponse{};
                     continue;
                 }
@@ -387,7 +344,6 @@ bool httpOwnedPoll()
             }
             if (entry.state == HttpOwnedState::Quarantined)
             {
-                finishHttpBody(entry);
                 if (!entry.reported)
                 {
                     entry.reported = true;
@@ -406,12 +362,11 @@ bool httpOwnedPoll()
                 else
                     ++httpOwnedCounters.released;
                 entry.owner.stop();
-                finishHttpBody(entry);
                 entry = HttpOwnedResponse{};
             }
         }
     }
-    const uint32_t now = static_cast<uint32_t>(_millis());
+    const _millis_t now = _millis();
     bool active = false;
     for (auto &entry : httpOwned)
     {
@@ -422,14 +377,12 @@ bool httpOwnedPoll()
         {
             // An alias already stopped this shared handle. Never use cached fd.
             entry.owner.stop();
-            finishHttpBody(entry);
             entry = HttpOwnedResponse{};
             continue;
         }
         if (currentFD != entry.fd)
         {
             entry.state = HttpOwnedState::Quarantined;
-            finishHttpBody(entry);
             entry.reported = true;
             ++httpOwnedCounters.quarantined;
             ESP_LOGE(TAG, "HTTP owner descriptor changed; HTTP admission paused");
@@ -441,7 +394,7 @@ bool httpOwnedPoll()
     for (const auto &entry : httpOwned)
         if (entry.state == HttpOwnedState::Active)
             httpOwnedCurrentPayload += entry.retained;
-    if (active && static_cast<uint32_t>(now - httpOwnedPolledAt) >= HTTP_OWNED_POLL_MS)
+    if (active && now - httpOwnedPolledAt >= HTTP_OWNED_POLL_MS)
     {
         httpOwnedPolledAt = now;
         httpOwnedNow = now;
@@ -457,160 +410,8 @@ bool httpOwnedPoll()
     return httpOwnedRoom();
 }
 
-// A write error must not call NetworkClient::stop(): it closes every shared
-// alias before the verified owner can retire queued TCP payload. These hooks
-// perform one nonblocking send and never service another application loop.
-size_t httpResponseWrite(NetworkClient &client, const uint8_t *data, size_t length)
-{
-    if (!httpWriting || client.fd() != httpWriting->fd)
-        return client.write(data, length); // Excluded OTA/reset paths retain SDK behavior.
-    if (httpWriting->writeFailed || length == 0)
-        return 0;
-    const ssize_t sent = send(client.fd(), data, length, MSG_DONTWAIT);
-    if (sent == static_cast<ssize_t>(length)) return length;
-    httpWriting->writeFailed = true;
-    httpWriting->discardQueued = true;
-    return sent > 0 ? static_cast<size_t>(sent) : 0;
-}
-
-class HttpResponsePrint : public Print
-{
-    NetworkClient client;
-public:
-    explicit HttpResponsePrint(const NetworkClient &owner) : client(owner) {}
-    using Print::write;
-    size_t write(uint8_t value) override { return write(&value, 1); }
-    size_t write(const uint8_t *data, size_t length) override
-    { return httpResponseWrite(client, data, length); }
-};
-
-class HttpBufferPrint : public Print
-{
-public:
-    size_t used = 0;
-    bool failed = false;
-    using Print::write;
-    size_t write(uint8_t value) override { return write(&value, 1); }
-    size_t write(const uint8_t *data, size_t length) override
-    {
-        const size_t copied = std::min(length, sizeof(writeBuffer) - used);
-        memcpy(writeBuffer + used, data, copied);
-        used += copied;
-        failed = failed || copied != length;
-        return copied;
-    }
-};
-
-bool deferHttpAsset(const uint8_t *data, size_t length)
-{
-    if (!httpWriting || httpWriting->writeFailed) return false;
-    httpWriting->body = length ? HttpBody::Flash : HttpBody::None;
-    httpWriting->bodyData = data;
-    httpWriting->bodyLength = length;
-    httpWriting->bodyOffset = 0;
-    httpWriting->bodyStarted = static_cast<uint32_t>(_millis());
-    return true;
-}
-
-void deferHttpMessageLog()
-{
-    if (!httpWriting || httpWriting->writeFailed) return;
-    ratgdoLogger->beginMessageLog(httpWriting->logCursor);
-    HttpBufferPrint header;
-    ratgdoLogger->printMessageLogHeader(header);
-    if (header.failed)
-    {
-        httpWriting->writeFailed = httpWriting->discardQueued = true;
-        return;
-    }
-    httpWriting->body = HttpBody::MessageLog;
-    httpWriting->bodyData = reinterpret_cast<const uint8_t *>(writeBuffer);
-    httpWriting->bodyLength = header.used;
-    httpWriting->bodyOffset = 0;
-    httpWriting->bodyStarted = static_cast<uint32_t>(_millis());
-}
-
-void deferHttpDiagnosticLog(bool crash)
-{
-    if (!httpWriting || httpWriting->writeFailed) return;
-    ratgdoLogger->beginDiagnosticLog(httpWriting->diagnosticCursor, crash);
-    httpWriting->body = HttpBody::DiagnosticLog;
-    httpWriting->bodyData = reinterpret_cast<const uint8_t *>(writeBuffer);
-    httpWriting->bodyLength = httpWriting->bodyOffset = 0;
-    httpWriting->bodyStarted = static_cast<uint32_t>(_millis());
-}
-
-// Main-only, one bounded send per entry per iteration. Flash assets stay in
-// flash; message logs use a cursor and the existing 512-byte web scratch buffer.
-// No request handling/JSON formatting may reuse that buffer until completion.
-bool drainHttpBodies()
-{
-    if (httpOwnedPending) return true;
-    bool pending = false;
-    for (auto &entry : httpOwned)
-    {
-        if (entry.state != HttpOwnedState::Active || entry.body == HttpBody::None) continue;
-        // An occasional ACK must not reserve the sole web scratch buffer and
-        // prevent HTTP admission indefinitely.
-        if (entry.writeFailed || static_cast<uint32_t>(_millis() - entry.bodyStarted) >= HTTP_BODY_MAX_LIFETIME_MS)
-        {
-            finishHttpBody(entry);
-            entry.discardQueued = true;
-            continue;
-        }
-        if (entry.bodyOffset == entry.bodyLength &&
-            (entry.body == HttpBody::MessageLog || entry.body == HttpBody::DiagnosticLog))
-        {
-            bool overwritten = false;
-            entry.bodyLength = entry.body == HttpBody::MessageLog ?
-                ratgdoLogger->readMessageLog(entry.logCursor, reinterpret_cast<uint8_t *>(writeBuffer), 256, overwritten) :
-                ratgdoLogger->readDiagnosticLog(entry.diagnosticCursor, reinterpret_cast<uint8_t *>(writeBuffer), 256, overwritten);
-            entry.bodyOffset = 0;
-            if (overwritten)
-            {
-                static const char truncated[] = "\nLog truncated: newer messages overwrote unread log data.\n";
-                static const char changed[] = "\nDiagnostic log changed during download; please request it again.\n";
-                const bool diagnostic = entry.body == HttpBody::DiagnosticLog;
-                entry.body = HttpBody::Flash;
-                entry.bodyData = reinterpret_cast<const uint8_t *>(diagnostic ? changed : truncated);
-                entry.bodyLength = diagnostic ? sizeof(changed) - 1 : sizeof(truncated) - 1;
-            }
-        }
-        if (entry.bodyOffset == entry.bodyLength && entry.body == HttpBody::Generated)
-        {
-            entry.bodyLength = entry.bodyReader(reinterpret_cast<uint8_t *>(writeBuffer), sizeof(writeBuffer));
-            entry.bodyOffset = 0;
-            if (entry.bodyLength > sizeof(writeBuffer))
-            {
-                finishHttpBody(entry);
-                entry.writeFailed = entry.discardQueued = true;
-                continue;
-            }
-        }
-        if (entry.bodyOffset == entry.bodyLength)
-        {
-            finishHttpBody(entry);
-            continue;
-        }
-        const size_t length = std::min<size_t>(1460, entry.bodyLength - entry.bodyOffset);
-        const ssize_t sent = send(entry.owner.fd(), entry.bodyData + entry.bodyOffset, length, MSG_DONTWAIT);
-        if (sent > 0) entry.bodyOffset += sent;
-        else if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK))
-        {
-            finishHttpBody(entry);
-            entry.writeFailed = entry.discardQueued = true;
-        }
-        if (entry.bodyOffset == entry.bodyLength && entry.body == HttpBody::Flash)
-            entry.body = HttpBody::None;
-        pending = pending || entry.body != HttpBody::None;
-    }
-    return pending;
-}
-
 void setupHttpOwnedExperiment()
 {
-    if (httpOwnedMessage)
-        return;
     httpOwnedMessage = tcpip_callbackmsg_new(httpOwnedInspect, nullptr);
     if (!httpOwnedMessage)
     {
@@ -637,76 +438,25 @@ void setupHttpOwnedExperiment()
         if (!slot || httpOwnedPending)
             return false; // Admission gate should prevent reaching this branch.
         NetworkClient retained = web.client(); // Strong reference before handler.
-        slot->owner = retained;
-        slot->fd = retained.fd();
-        slot->generation = ++httpOwnedCounters.tracked;
-        slot->lastProgress = static_cast<uint32_t>(_millis());
-        slot->state = HttpOwnedState::Active;
-        httpWriting = slot;
         const bool handled = next();
-        httpWriting = nullptr;
         const int fd = retained.fd(); // A failed write may already have stopped it.
         // Successful streams, including failed headers awaiting retirement,
         // retain their owner in the subscription. Invalid/rejected stream
         // requests produce ordinary responses and still need bounded cleanup.
         if (eventStream && fd >= 0 && retainedBySSE(fd))
-        {
-            *slot = HttpOwnedResponse{}; // Stream subscription retains its own alias.
             return handled;
-        }
         if (fd >= 0)
         {
+            slot->owner = retained;
             slot->fd = fd;
-        }
-        else
-        {
-            finishHttpBody(*slot);
-            *slot = HttpOwnedResponse{};
+            slot->generation = ++httpOwnedCounters.tracked;
+            slot->lastProgress = _millis();
+            slot->state = HttpOwnedState::Active;
         }
         return handled;
     });
 }
-// Pumping is also needed during AP onboarding, before garage/web setup.
-// The caller owns the sole handleClient call for this main-loop iteration.
-bool pollHttpResponses()
-{
-    if (!httpOwnedMessage)
-        return false;
-    const bool room = httpOwnedPoll();
-    if (httpOwnedPending)
-        return true; // Core owns all response entries until its callback finishes.
-    const bool retiredRoom = !web_setup_done || drainRetiredSSE();
-    const bool bodyPending = drainHttpBodies();
-    if (room && retiredRoom && !bodyPending)
-        server.handleClient();
-    // A newly admitted handler may have leased the scratch buffer.
-    for (const auto &entry : httpOwned)
-        if (entry.state == HttpOwnedState::Active && entry.body != HttpBody::None)
-            return true;
-    return bodyPending;
-}
-
 } // namespace
-#endif
-
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-void setup_http_response_delivery()
-{
-    setupHttpOwnedExperiment();
-}
-
-bool defer_http_generated_body(size_t (*reader)(uint8_t *, size_t), void (*cleanup)())
-{
-    if (!httpWriting || httpWriting->writeFailed || !reader || !cleanup)
-        return false;
-    httpWriting->body = HttpBody::Generated;
-    httpWriting->bodyReader = reader;
-    httpWriting->bodyCleanup = cleanup;
-    httpWriting->bodyData = reinterpret_cast<const uint8_t *>(writeBuffer);
-    httpWriting->bodyOffset = httpWriting->bodyLength = 0;
-    httpWriting->bodyStarted = static_cast<uint32_t>(_millis());
-    return true;
-}
 #endif
 
 // Local copy of door status
@@ -741,13 +491,7 @@ static constexpr uint32_t OTA_STAGED_RESTART_MS = 30000;
 
 static bool recoverStoppedOTAServices()
 {
-    if (!otaRecoveryPending || otaUploadActive)
-        return false;
-#ifdef ESP8266
-    if (static_cast<int32_t>(_millis() - otaRecoveryAt) < 0)
-#else
-    if (_millis() < otaRecoveryAt)
-#endif
+    if (!otaRecoveryPending || otaUploadActive || _millis() < otaRecoveryAt)
         return false;
 #if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
     // Do not close a shared response owner during core-thread inspection.
@@ -820,20 +564,9 @@ bool retireSSESubscription(std::atomic<bool> &active,
     return true;
 }
 
-// Called under the lifecycle lock; elapsed subtraction also handles millis wrap.
-inline bool takeSSEHeartbeat(bool active, bool connected, uint32_t interval,
-                             uint32_t &lastHeartbeat, uint32_t now)
-{
-    // Reap registrations whose client never opens the event stream, including
-    // subscriptions that disable periodic heartbeats after connecting.
-    if (!connected)
-        interval = 1;
-    if (!active || !interval || interval > 60 ||
-        static_cast<uint32_t>(now - lastHeartbeat) < interval * 1000)
-        return false;
-    lastHeartbeat = now;
-    return true;
-}
+// Ticker callbacks never touch clients or wait for the lifecycle lock.
+inline void requestSSEHeartbeat(std::atomic<bool> &pending) { pending.store(true); }
+inline bool takeSSEHeartbeat(std::atomic<bool> &pending) { return pending.exchange(false); }
 
 // The caller holds the lifecycle lock while checking and assigning the client.
 template <typename UUID, typename Client>
@@ -850,7 +583,8 @@ struct SSESubscription
 {
     IPAddress clientIP;
     WiFiClient client;
-    uint32_t lastHeartbeat = 0;
+    Ticker heartbeatTimer;
+    std::atomic<bool> heartbeatPending{false};
     uint32_t heartbeatInterval;
     std::atomic<bool> active{false};
     bool SSEconnected;
@@ -993,6 +727,7 @@ ActiveRequest activeRequests[MAX_CONCURRENT_REQUESTS];
 int activeRequestCount = 0;
 
 #define CLIENT_WRITE_TIMEOUT 500
+static char writeBuffer[512];
 bool clientWrite(WiFiClient client, const char *data)
 {
     const size_t len = strlen(data);
@@ -1124,35 +859,29 @@ void notify_new_ipv6_address()
 
 void web_loop()
 {
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    const bool bodyPending = pollHttpResponses();
-#endif
     if (!web_setup_done)
         return;
+#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
+    const bool ownedRoom = httpOwnedPoll();
+    const bool mayHandleClient = drainRetiredSSE() && ownedRoom;
+#endif
     if (recoverStoppedOTAServices())
         return;
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    if (bodyPending)
-        return;
-#endif
 
-    // Poll heartbeat deadlines while holding the same lock as slot reuse.
-    TAKE_MUTEX(); // JSON must always precede the SSE lock.
+    // Timer callbacks only signal work; client access stays in the web loop.
+    for (uint32_t i = 0; i < SSE_MAX_CHANNELS; ++i)
     {
-        SSELock lock;
-        if (lock)
+        if (takeSSEHeartbeat(subscription[i].heartbeatPending))
         {
-            const uint32_t now = static_cast<uint32_t>(_millis());
-            for (uint32_t i = 0; i < SSE_MAX_CHANNELS; ++i)
+            TAKE_MUTEX(); // JSON must always precede the SSE lock.
             {
-                SSESubscription &s = subscription[i];
-                if (takeSSEHeartbeat(s.active, s.SSEconnected, s.heartbeatInterval,
-                                     s.lastHeartbeat, now))
-                    SSEheartbeat(&s);
+                SSELock lock;
+                if (lock && subscription[i].active)
+                    SSEheartbeat(&subscription[i]);
             }
+            GIVE_MUTEX();
         }
     }
-    GIVE_MUTEX();
 
     static char *json = status_json;
     _millis_t upTime = _millis();
@@ -1353,9 +1082,10 @@ void web_loop()
     }
     // WebServer::handleClient() advances a connection state machine. Delaying
     // every step adds latency even to an idle server; it is not request limiting.
-#if !defined(ESP32) || !defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    server.handleClient();
+#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
+    if (mayHandleClient)
 #endif
+        server.handleClient();
 }
 
 void setup_web()
@@ -1473,16 +1203,7 @@ String *ratgdoAuthenticate(HTTPAuthMethod mode, String enteredUsernameOrReq, Str
     // ESP_LOGI(TAG, "User: %s", enteredUsernameOrReq);       // Username
     // ESP_LOGI(TAG, "Param 0: %s", extraParams[0].c_str());  // Realm
     // ESP_LOGI(TAG, "Param 1: %s", extraParams[1].c_str());  // URI
-    char *stored = nvRam->readAllocatedString(nvram_ratgdo_pw, "password");
-    if (!stored)
-        return nullptr;
-    String *pw = new (std::nothrow) String();
-    if (pw && !pw->concat(stored))
-    {
-        delete pw;
-        pw = nullptr;
-    }
-    free(stored);
+    String *pw = new String(read_door_str(nvram_ratgdo_pw, "password").c_str());
     return pw;
 }
 #endif
@@ -1638,13 +1359,7 @@ void load_page(const char *page)
         else
         {
             ESP_LOGD(TAG, "Client %s requesting: %s (HTTP_GET, type: %s, length: %d)", clientIP.toString().c_str(), page, type, length);
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-            server.setContentLength(length);
-            server.send_P(200, type, "", 0);
-            deferHttpAsset(reinterpret_cast<const uint8_t *>(data), length);
-#else
             server.send_P(200, type, reinterpret_cast<const char *>(data), length);
-#endif
         }
     }
     else
@@ -1743,9 +1458,6 @@ void handle_everything()
 
 void build_status_json(char *json)
 {
-    // A queued log download leases writeBuffer across main-loop iterations.
-    // Serial CLI status requests must not overwrite that pending chunk.
-    char historyJSON[192]; // Eight signed 32-bit values plus fixed syntax fit.
     // Build the JSON string
     _millis_t upTime = _millis();
     JSON_START(json);
@@ -1843,18 +1555,18 @@ void build_status_json(char *json)
     if (garage_door.openDuration)
     {
         JSON_ADD_INT("openDuration", garage_door.openDuration);
-        snprintf_P(historyJSON, sizeof(historyJSON), PSTR("{ \"max\": %d, \"count\": %d, \"duration\": [ %d, %d, %d, %d, %d, %d ] }"),
+        snprintf_P(writeBuffer, sizeof(writeBuffer), PSTR("{ \"max\": %d, \"count\": %d, \"duration\": [ %d, %d, %d, %d, %d, %d ] }"),
                    openHistory.max, openHistory.count,
                    OPEN_HISTORY(1), OPEN_HISTORY(2), OPEN_HISTORY(3), OPEN_HISTORY(4), OPEN_HISTORY(5), OPEN_HISTORY(6));
-        JSON_ADD_RAW("openHistory", historyJSON);
+        JSON_ADD_RAW("openHistory", writeBuffer);
     }
     if (garage_door.closeDuration)
     {
         JSON_ADD_INT("closeDuration", garage_door.closeDuration);
-        snprintf_P(historyJSON, sizeof(historyJSON), PSTR("{ \"max\": %d, \"count\": %d, \"duration\": [ %d, %d, %d, %d, %d, %d ] }"),
+        snprintf_P(writeBuffer, sizeof(writeBuffer), PSTR("{ \"max\": %d, \"count\": %d, \"duration\": [ %d, %d, %d, %d, %d, %d ] }"),
                    closeHistory.max, closeHistory.count,
                    CLOSE_HISTORY(1), CLOSE_HISTORY(2), CLOSE_HISTORY(3), CLOSE_HISTORY(4), CLOSE_HISTORY(5), CLOSE_HISTORY(6));
-        JSON_ADD_RAW("closeHistory", historyJSON);
+        JSON_ADD_RAW("closeHistory", writeBuffer);
     }
 #ifdef ESP8266
 #define accessoryID arduino_homekit_get_running_server() ? arduino_homekit_get_running_server()->accessory_id : "Inactive"
@@ -2063,184 +1775,36 @@ bool helperGarageLockState(const std::string &key, const char *value, configSett
     return true;
 }
 
-struct RequestJsonField
-{
-    const char *key;
-    bool quoted;
-    const char *begin = nullptr;
-    const char *end = nullptr;
-};
-
-static void skipRequestSpace(const char *&p)
-{
-    while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n') ++p;
-}
-
-static int requestHex(char c)
-{
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-// Decode to the same storage only after the entire request has been checked.
-// The callback receives mutable std::string storage from handle_setgdo().
-static bool requestString(const char *begin, const char *end, char *out = nullptr, size_t *decodedLength = nullptr)
-{
-    size_t length = 0;
-    for (const char *p = begin; p < end; ++p)
-    {
-        uint32_t c = static_cast<unsigned char>(*p);
-        if (c < 0x20) return false;
-        if (c == '\\')
-        {
-            if (++p == end) return false;
-            switch (*p)
-            {
-            case '"': case '\\': case '/': c = *p; break;
-            case 'b': c = '\b'; break;
-            case 'f': c = '\f'; break;
-            case 'n': c = '\n'; break;
-            case 'r': c = '\r'; break;
-            case 't': c = '\t'; break;
-            case 'u':
-            {
-                if (end - p < 5) return false;
-                c = 0;
-                for (unsigned i = 0; i < 4; ++i)
-                {
-                    int digit = requestHex(*++p);
-                    if (digit < 0) return false;
-                    c = (c << 4) | digit;
-                }
-                if (c >= 0xD800 && c <= 0xDBFF)
-                {
-                    if (end - p < 7 || p[1] != '\\' || p[2] != 'u') return false;
-                    p += 2;
-                    uint32_t low = 0;
-                    for (unsigned i = 0; i < 4; ++i)
-                    {
-                        int digit = requestHex(*++p);
-                        if (digit < 0) return false;
-                        low = (low << 4) | digit;
-                    }
-                    if (low < 0xDC00 || low > 0xDFFF) return false;
-                    c = 0x10000 + ((c - 0xD800) << 10) + low - 0xDC00;
-                }
-                else if (c >= 0xDC00 && c <= 0xDFFF) return false;
-                if (c == 0) return false; // Configuration strings are NUL terminated.
-                length += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-                if (out)
-                {
-                    if (c >= 0x10000) *out++ = 0xF0 | (c >> 18);
-                    if (c >= 0x800) *out++ = (c >= 0x10000 ? 0x80 : 0xE0) | ((c >> 12) & 0x3F);
-                    if (c >= 0x80) *out++ = (c >= 0x800 ? 0x80 : 0xC0) | ((c >> 6) & 0x3F);
-                    *out++ = c >= 0x80 ? 0x80 | (c & 0x3F) : c;
-                }
-                continue;
-            }
-            default: return false;
-            }
-        }
-        ++length;
-        if (out) *out++ = c;
-    }
-    if (out) *out = 0;
-    if (decodedLength) *decodedLength = length;
-    return true;
-}
-
-static bool readRequestQuoted(const char *&p, const char *&begin, const char *&end)
-{
-    if (*p++ != '"') return false;
-    begin = p;
-    while (*p && *p != '"')
-    {
-        if (*p == '\\' && !*++p) return false;
-        ++p;
-    }
-    if (*p != '"') return false;
-    end = p++;
-    return requestString(begin, end);
-}
-
-// Accept the client's small flat schemas, with literal keys and string or
-// unsigned-decimal values. Reject unknown/duplicate keys and trailing input.
-static bool readRequestObject(const char *value, RequestJsonField *fields, size_t count)
-{
-    if (!value) return false;
-    const char *p = value;
-    skipRequestSpace(p);
-    if (*p++ != '{') return false;
-    for (size_t n = 0; n < count; ++n)
-    {
-        skipRequestSpace(p);
-        const char *key, *keyEnd;
-        if (!readRequestQuoted(p, key, keyEnd)) return false;
-        RequestJsonField *field = nullptr;
-        for (size_t i = 0; i < count; ++i)
-            if (strlen(fields[i].key) == static_cast<size_t>(keyEnd - key) &&
-                !memcmp(fields[i].key, key, keyEnd - key)) field = &fields[i];
-        if (!field || field->begin) return false;
-        skipRequestSpace(p);
-        if (*p++ != ':') return false;
-        skipRequestSpace(p);
-        if (field->quoted)
-        {
-            if (!readRequestQuoted(p, field->begin, field->end)) return false;
-        }
-        else
-        {
-            field->begin = p;
-            while (*p >= '0' && *p <= '9') ++p;
-            field->end = p;
-            if (p == field->begin || (p - field->begin > 1 && *field->begin == '0')) return false;
-        }
-        skipRequestSpace(p);
-        if (*p++ != (n + 1 == count ? '}' : ',')) return false;
-    }
-    skipRequestSpace(p);
-    if (*p) return false;
-    return true;
-}
-
-static bool readFirmwareSize(const char *begin, const char *end, size_t &result)
-{
-    result = 0;
-    if (begin == end) return false;
-    for (; begin < end; ++begin)
-    {
-        const unsigned digit = static_cast<unsigned char>(*begin) - '0';
-        if (digit > 9 || result > (UINT32_MAX - digit) / 10) return false;
-        result = result * 10 + digit;
-    }
-    return result != 0;
-}
-
-static bool validRequestMD5(const RequestJsonField &field)
-{
-    if (field.end - field.begin != 32) return false;
-    for (const char *p = field.begin; p < field.end; ++p)
-        if (requestHex(*p) < 0) return false;
-    return true;
-}
-
 bool helperCredentials(const std::string &key, const char *value, configSetting *action)
 {
-    RequestJsonField fields[] = {{"username", true}, {"credentials", true}, {"password", true}};
-    if (!readRequestObject(value, fields, 3) || !validRequestMD5(fields[1])) return false;
-    size_t usernameLength = 0;
-    if (!requestString(fields[0].begin, fields[0].end, nullptr, &usernameLength)) return false;
-    const configStr username = std::get<configStr>(userConfig->get(cfg_wwwUsername));
-    if (!usernameLength || usernameLength >= username.max) return false;
-    // Decode only once all fields are present and well formed. The previous
-    // parser could write through NULL for a missing closing quote.
-    for (auto &field : fields)
-        requestString(field.begin, field.end, const_cast<char *>(field.begin));
-    const char *newUsername = fields[0].begin;
-    const char *newCredentials = fields[1].begin;
-    const char *newPassword = fields[2].begin;
+#define PTR1 ((const char *)1)
+    const char *newUsername = strstr(value, "username");
+    const char *newCredentials = strstr(value, "credentials");
+    const char *newPassword = strstr(value, "password");
+    if (!(newUsername && newCredentials && newPassword))
+        return false;
+
+    // JSON string passed in.
+    // Very basic parsing, not using library functions to save memory
+    // find the colon after the key string
+    newUsername = strchr(newUsername, ':') + 1;
+    newCredentials = strchr(newCredentials, ':') + 1;
+    newPassword = strchr(newPassword, ':') + 1;
+    // check that none of the strchr() calls failed.
+    if ((newUsername == PTR1) || (newCredentials == PTR1) || (newPassword == PTR1))
+        return false;
+    // for strings find the double quote
+    newUsername = strchr(newUsername, '"') + 1;
+    newCredentials = strchr(newCredentials, '"') + 1;
+    newPassword = strchr(newPassword, '"') + 1;
+    // Again check that none of the strchr() calls failed.
+    if ((newUsername == PTR1) || (newCredentials == PTR1) || (newPassword == PTR1))
+        return false;
+    // null terminate the strings (at closing quote).
+    // We are trusting that if the first quote was found, the second quote will be found as well (so strchr will not return NULL)
+    *strchr(newUsername, '"') = (char)0;
+    *strchr(newCredentials, '"') = (char)0;
+    *strchr(newPassword, '"') = (char)0;
     // save values...
     ESP_LOGI(TAG, "Set credentials for user: %s", newUsername);
     userConfig->set(cfg_wwwUsername, newUsername);
@@ -2255,19 +1819,40 @@ bool helperCredentials(const std::string &key, const char *value, configSetting 
 
 bool helperUpdateUnderway(const std::string &key, const char *value, configSetting *action)
 {
-    RequestJsonField fields[] = {{"md5", true}, {"size", false}, {"uuid", true}};
-    size_t size;
-    if (!readRequestObject(value, fields, 3) || !validRequestMD5(fields[0]) ||
-        !readFirmwareSize(fields[1].begin, fields[1].end, size)) return false;
-    if (fields[2].begin == fields[2].end) return false;
-    for (auto &field : fields)
-        if (field.quoted) requestString(field.begin, field.end, const_cast<char *>(field.begin));
-    const char *uuid = fields[2].begin;
+    firmwareSize = 0;
+    firmwareUpdateSub = NULL;
+    const char *md5 = strstr(value, "md5");
+    const char *size = strstr(value, "size");
+    const char *uuid = strstr(value, "uuid");
+
+    if (!(md5 && size && uuid))
+        return false;
+
+    // JSON string of passed in.
+    // Very basic parsing, not using library functions to save memory
+    // find the colon after the key string
+    md5 = strchr(md5, ':') + 1;
+    size = strchr(size, ':') + 1;
+    uuid = strchr(uuid, ':') + 1;
+    // check that none of the strchr() calls failed.
+    if ((md5 == PTR1) || (size == PTR1) || (uuid == PTR1))
+        return false;
+    // for strings find the double quote
+    md5 = strchr(md5, '"') + 1;
+    uuid = strchr(uuid, '"') + 1;
+    // again, check that none of the strchr() calls failed.
+    if ((md5 == PTR1) || (uuid == PTR1))
+        return false;
+    // null terminate the strings (at closing quote).
+    // We are trusting that if the first quote was found, the second quote will be found as well (so strchr will not return NULL)
+    *strchr(md5, '"') = (char)0;
+    *strchr(uuid, '"') = (char)0;
+    // ESP_LOGI(TAG,"MD5: %s, UUID: %s, Size: %d", md5, uuid, atoi(size));
+    // save values...
+    strlcpy(firmwareMD5, md5, sizeof(firmwareMD5));
+    firmwareSize = (size_t)atoi(size);
     SSELock lock;
     if (!lock) return false;
-    strlcpy(firmwareMD5, fields[0].begin, sizeof(firmwareMD5));
-    firmwareSize = size;
-    firmwareUpdateSub = nullptr;
     for (uint32_t channel = 0; channel < SSE_MAX_CHANNELS; channel++)
     {
         if (subscription[channel].SSEconnected && subscription[channel].clientUUID == uuid && subscription[channel].client.connected())
@@ -2453,7 +2038,8 @@ void removeSSEsubscription(SSESubscription *s)
         SSESubscription *expected = s;
         firmwareUpdateSub.compare_exchange_strong(expected, nullptr);
         s->SSEconnected = false;
-        s->lastHeartbeat = 0;
+        s->heartbeatTimer.detach();
+        s->heartbeatPending = false;
 #if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
         s->retiring = s->client.fd() >= 0;
         if (s->retiring)
@@ -2581,7 +2167,12 @@ void SSEHandler(uint32_t channel)
 #endif
     s.SSEconnected = true;
     s.SSEfailCount = 0;
-    s.lastHeartbeat = static_cast<uint32_t>(_millis());
+    if (s.heartbeatInterval)
+    {
+        s.heartbeatTimer.attach_ms(s.heartbeatInterval * 1000, [&s] {
+            requestSSEHeartbeat(s.heartbeatPending);
+        });
+    }
     ESP_LOGD(TAG, "Client %s (%s) listening for SSE events on channel %d", s.client.remoteIP().toString().c_str(), s.clientUUID.c_str(), channel);
 }
 
@@ -2727,7 +2318,7 @@ void handle_subscribe()
 #else
     subscription[channel].client = client;
 #endif
-    subscription[channel].lastHeartbeat = static_cast<uint32_t>(_millis());
+    subscription[channel].heartbeatTimer = Ticker();
     subscription[channel].SSEconnected = false;
     subscription[channel].SSEfailCount = 0;
     subscription[channel].clientUUID = server.arg(id);
@@ -2745,53 +2336,29 @@ void handle_crashlog()
 {
     if (!requestAuthenticated())
         return;
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    HttpResponsePrint output(server.client());
-#else
-    WiFiClient output = server.client();
-#endif
-    output.print(response200);
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    deferHttpDiagnosticLog(true);
-#else
-    ratgdoLogger->printCrashLog(output);
-#endif
+    server.client().print(response200);
+    ratgdoLogger->printCrashLog(server.client());
 }
 
 void handle_showlog()
 {
     if (!requestAuthenticated())
         return;
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    HttpResponsePrint output(server.client());
-    output.print(response200);
-    deferHttpMessageLog();
-#else
     server.client().print(response200);
     ratgdoLogger->printMessageLog(server.client());
-#endif
 }
 
 void handle_showrebootlog()
 {
     if (!requestAuthenticated())
         return;
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    HttpResponsePrint output(server.client());
-#else
-    WiFiClient output = server.client();
-#endif
-    output.print(response200);
+    server.client().print(response200);
 #ifdef ESP8266
     File file = LittleFS.open(REBOOT_LOG_MSG_FILE, "r");
-    ratgdoLogger->printSavedLog(file, output);
+    ratgdoLogger->printSavedLog(file, server.client());
     file.close();
 #else
-#if defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    deferHttpDiagnosticLog(false);
-#else
-    ratgdoLogger->printSavedLog(output);
-#endif
+    ratgdoLogger->printSavedLog(server.client());
 #endif
 }
 
@@ -2954,48 +2521,30 @@ void handle_firmware_upload()
         // Never reboot in the middle of a transfer/verification. Keep an
         // existing recovery deadline armed until a terminal callback, so a
         // rejected retry cannot permanently cancel recovery.
+        otaUploadActive = true;
         ESP_LOGI(TAG, "Update: %s", upload.filename.c_str());
         verify = !strcmp(server.arg("action").c_str(), "verify");
-        const String sizeArg = server.arg("size");
-        const String md5 = server.arg("md5");
-        size = 0;
-        if (sizeArg.length() &&
-            !readFirmwareSize(sizeArg.c_str(), sizeArg.c_str() + sizeArg.length(), size))
-        {
-            _updaterError = "Invalid firmware size";
-            return;
-        }
-        if (md5.length())
-        {
-            bool valid = md5.length() == 32;
-            for (size_t i = 0; valid && i < md5.length(); ++i)
-                valid = requestHex(md5.c_str()[i]) >= 0;
-            if (!valid)
-            {
-                _updaterError = "Invalid firmware MD5";
-                return;
-            }
-        }
-
-        // An omitted hash belongs to this upload, not the previous request.
+        size = atoi(server.arg("size").c_str());
+        // We are updating.  If size and MD5 provided, save them
         firmwareSize = size;
-        strlcpy(firmwareMD5, md5.c_str(), sizeof(firmwareMD5));
-        const uint32_t freeSketchSpace = ESP.getFreeSketchSpace();
-        const uint32_t maxSketchSpace = freeSketchSpace > 0x1000
-            ? (freeSketchSpace - 0x1000) & 0xFFFFF000 : 0;
-        if (!maxSketchSpace || firmwareSize > maxSketchSpace)
-        {
-            _updaterError = "Not Enough Space";
-            return;
-        }
-        otaUploadActive = true;
+        // arg()'s temporary remains alive through this complete copy expression.
+        strlcpy(firmwareMD5, server.arg("md5").c_str(), sizeof(firmwareMD5));
+
+        uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
         ESP_LOGI(TAG, "Available space for upload: %lu", maxSketchSpace);
         ESP_LOGI(TAG, "Firmware size: %s", (firmwareSize > 0) ? std::to_string(firmwareSize).c_str() : "Unknown");
         ESP_LOGI(TAG, "Flash chip speed %d MHz", ESP.getFlashChipSpeed() / 1000000);
         // struct eboot_command ebootCmd;
         // eboot_command_read(&ebootCmd);
         // ESP_LOGI(TAG, "eboot_command: 0x%08X 0x%08X [0x%08X 0x%08X 0x%08X (%d)]", ebootCmd.magic, ebootCmd.action, ebootCmd.args[0], ebootCmd.args[1], ebootCmd.args[2], ebootCmd.args[2]);
-        if (!verify)
+        if (firmwareSize > maxSketchSpace)
+        {
+            ESP_LOGE(TAG, "Firmware size is larger than available OTA upload space");
+            // If we detect this error then we will not shut down all our services, because upload will fail.
+            // Failure is detected on first call to Update.write() where it will set UPDATE_ERROR_SPACE.
+            // This is passed back to the client with a http 400 error and the string "Not Enough Space"
+        }
+        else if (!verify)
         {
 #ifdef ESP32
             // Pause at HomeSpan's own polling boundary; retain the task and its locks.

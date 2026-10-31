@@ -110,19 +110,12 @@ inline char *add_int(char *s, const char *end, const char *k, uint32_t v)
 
 inline char *add_str(char *s, const char *end, const char *k, const char *v, bool raw = false, bool comma_nl = true)
 {
+    size_t vlen = v ? strlen(v) : 0;
     size_t klen = k ? strlen(k) : 0;
-    size_t need = (k ? klen + 4 : 0) + (v && !raw ? 2 : 0) + (comma_nl ? 2 : 0);
+    // Worst case: every value char is escaped.
+    size_t need = (k ? klen + 4 : 0) + (raw ? vlen : vlen * 2 + 2) + (comma_nl ? 2 : 0);
     if (!json_has_room(s, end, need))
         return s;
-    // Measure the encoded value before writing so fields are never truncated.
-    // Stop at the buffer limit rather than multiplying the input length.
-    for (const unsigned char *p = (const unsigned char *)v; p && *p; ++p)
-    {
-        size_t encoded = raw ? 1 : (*p < 0x20 ? 6 : (*p == '"' || *p == '\\' ? 2 : 1));
-        if (!json_has_room(s, end, need + encoded))
-            return s;
-        need += encoded;
-    }
 
     if (k) // if key provided add it
     {
@@ -145,27 +138,19 @@ inline char *add_str(char *s, const char *end, const char *k, const char *v, boo
         }
         else
         {
-            // JSON requires escaping every control byte below U+0020.
-            static const char hex[] = "0123456789abcdef";
+            // wrap the value in quotes and escape any quotes or backslashes in the value
             *s++ = '"';
             while (*v)
             {
-                unsigned char c = (unsigned char)*v++;
-                if (c < 0x20)
+                if (*v == '"' || *v == '\\')
                 {
+                    if (!json_has_room(s, end, 2))
+                        break;
                     *s++ = '\\';
-                    *s++ = 'u';
-                    *s++ = '0';
-                    *s++ = '0';
-                    *s++ = hex[c >> 4];
-                    *s++ = hex[c & 0x0f];
                 }
-                else
-                {
-                    if (c == '"' || c == '\\')
-                        *s++ = '\\';
-                    *s++ = c;
-                }
+                if (!json_has_room(s, end, 1))
+                    break;
+                *s++ = *v++;
             }
             *s++ = '"';
         }

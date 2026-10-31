@@ -16,13 +16,11 @@ class CrashLogLockTest(unittest.TestCase):
         start = source.index("void LOG::clearCrashLog()")
         end = source.index("#ifdef ESP8266\nvoid LOG::printCrashLog", start)
         clear = source[start:end]
-        start = source.index("void LOG::printCrashLog(", end)
-        start = source.index("void LOG::printCrashLog(", start + 1)
+        start = source.index("void LOG::printCrashLog(Print &outputDev)", end)
+        start = source.index("void LOG::printCrashLog(Print &outputDev)", start + 1)
         end = source.index("void LOG::saveMessageLog()", start)
         crash = source[start:end]
         harness = HARNESS.replace("/* ACTUAL_SOURCE */", clear + crash)
-        declaration = "void printCrashLog(Print &, bool = true); void printCoreDump(Print &, bool);" if "bool includeCore" in crash else "void printCrashLog(Print &);"
-        harness = harness.replace("/* DECLARATIONS */", declaration)
         with tempfile.TemporaryDirectory() as tmp:
             cpp = Path(tmp) / "crash-log.cpp"
             executable = Path(tmp) / "crash-log"
@@ -53,7 +51,6 @@ thread_local int held=0;
 #define GIVE_MUTEX() do { --held; logMutex.unlock(); } while (0)
 struct Buffer { uint32_t wrapped=0, head=0; char buffer[32]{}; } rtcCrashLog;
 int32_t crashCount=0; time_t crashTime=0; _millis_t crashUpTime=0;
-uint32_t diagnosticRevision=0;
 char reasonString[64]="reason", crashVersion[16]="1.0";
 struct esp_core_dump_summary_t { char exc_task[32]; unsigned long exc_pc; struct { int depth; unsigned long bt[12]; } exc_bt_info; };
 const int ESP_OK=0;
@@ -74,7 +71,7 @@ struct Print {
  void write(const char *s,size_t n){maybeBlock();out.append(s,n);}
  void flush(){assertUnlocked();}
 };
-class LOG { public: void clearCrashLog(); /* DECLARATIONS */ };
+class LOG { public: void clearCrashLog(); void printCrashLog(Print &); };
 void *test_malloc(size_t n){assertUnlocked();return fail_alloc?nullptr:std::malloc(n);}
 #define malloc test_malloc
 /* ACTUAL_SOURCE */

@@ -14,10 +14,7 @@
 #ifdef RATGDO_ENCODER
 #include "ratgdo.h"
 void setup_encoder();
-void encoder_loop();      // called under the door-command lock
-void encoder_control_loop(); // main-loop entry that takes the command lock
-void cancel_encoder_correction(); // caller holds the command lock
-void reset_encoder_cal_locked(); // implementation called by locked reset wrapper
+void encoder_loop();      // call from drycontact_loop() every main-loop tick
 void reset_encoder_cal(); // called by web handler "resetEncoderCal"
 void encoder_set_intended_open();
 void encoder_set_intended_close();

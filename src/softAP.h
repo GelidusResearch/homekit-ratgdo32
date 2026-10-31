@@ -37,21 +37,7 @@ extern std::multiset<wifiNet_t, bool (*)(const wifiNet_t &, const wifiNet_t &)> 
 
 extern void start_soft_ap();
 extern void soft_ap_loop();
-// With retainResults, successful scans keep the registry leased to the caller.
-extern bool wifi_scan(bool retainResults = false);
-extern void release_wifi_scan_results();
-extern bool acquire_wifi_scan_results();
-class WifiScanResults
-{
-    bool held = false;
-public:
-    WifiScanResults() = default;
-    WifiScanResults(const WifiScanResults &) = delete;
-    WifiScanResults &operator=(const WifiScanResults &) = delete;
-    bool scan() { if (!held) held = wifi_scan(true); return held; }
-    bool acquire() { if (!held) held = acquire_wifi_scan_results(); return held; }
-    ~WifiScanResults() { if (held) release_wifi_scan_results(); }
-};
+extern void wifi_scan();
 const char *encryptionToString(uint16_t e);
 
 extern void handle_setssid();

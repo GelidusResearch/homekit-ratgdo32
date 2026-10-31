@@ -31,7 +31,7 @@ class ReverseAfterStop(unittest.TestCase):
         self.assertLess(notify, first_command, "follow-up must see the new stopped state")
         followup = update.index("if (current_state == GarageDoorCurrentState::CURR_STOPPED &&")
         followup_code = block(update, followup)
-        close_start = text.index("bool startDoorCloseCommand()\n{")
+        close_start = text.index("void door_command_close()\n{")
         close = block(text, close_start)
         decision_start = close.index("    if (", close.index("#else"))
         decision_end = close.index("    if (doorControlType == DOOR_CONTROL_SEC_PLUS_V2", decision_start)
@@ -54,13 +54,12 @@ _millis_t now=1000, stopSentClosePending=0, stopSentOpenPending=0;
 _millis_t _millis() { return now; }
 int toggles=0, closes=0, opens=0, timers=0;
 bool queueAccepts=true;
-bool door_command(DoorAction a, DoorCommandLifecycle::Intent = DoorCommandLifecycle::Intent::None) { if (!queueAccepts) return false; if (a == Toggle) ++toggles; else ++closes; return true; }
+bool door_command(DoorAction a) { if (!queueAccepts) return false; if (a == Toggle) ++toggles; else ++closes; return true; }
 void door_command_open() { ++opens; }
-bool closeDecision() {
+void door_command_close() {
 """ + decision + r"""
-    ++timers;return true;
+    ++timers;
 }
-void door_command_close(){closeDecision();}
 void follow(GarageDoorCurrentState current_state) {
 """ + followup_code + r"""
 }
@@ -79,17 +78,8 @@ int main() {
     follow(CURR_STOPPED); assert(toggles==1 && stopSentClosePending==0);
     now=3000; stopSentOpenPending=2900;
     follow(CURR_STOPPED); assert(opens==1 && stopSentOpenPending==0);
-    const uint32_t token=doorLifecycle.begin(CURR_OPENING,now);
-    doorLifecycle.writing(token,true);doorLifecycle.status(CURR_STOPPED);
-    stopSentOpenPending=now;
-    follow(CURR_STOPPED);assert(opens==1 && stopSentOpenPending==0);
-    assert(doorLifecycle.poll(now)==DoorCommandLifecycle::Intent::None);
-    doorLifecycle.writing(token,false);
-    assert(doorLifecycle.poll(now)==DoorCommandLifecycle::Intent::Open);
 }
 """
-        header = (SOURCE.parent / "door_command_lifecycle.h").read_text().replace("#pragma once", "")
-        harness = header + "\nDoorCommandLifecycle doorLifecycle;\n" + harness
         with tempfile.TemporaryDirectory() as tmp:
             cpp = Path(tmp) / "reverse.cpp"
             exe = Path(tmp) / "reverse"

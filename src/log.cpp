@@ -37,7 +37,6 @@
 // Protected by logMutex. Absolute byte positions let a reader detect when
 // newer messages have overwritten bytes it has not copied yet.
 static uint64_t logAppendBytes = 0;
-static uint32_t diagnosticRevision = 0;
 #endif
 
 // Logger tag
@@ -327,7 +326,6 @@ void LOG::clearCrashLog()
     esp_core_dump_image_erase();
     TAKE_MUTEX();
     crashCount = 0;
-    ++diagnosticRevision;
     GIVE_MUTEX();
 #endif
 }
@@ -359,7 +357,7 @@ void LOG::printCrashLog(Print &outputDev)
 }
 
 #else
-void LOG::printCrashLog(Print &outputDev, bool includeCore)
+void LOG::printCrashLog(Print &outputDev)
 {
     // The RTC crash log is written only by the panic handler, which resets the
     // device. Snapshot ordinary mutable metadata without holding the logger
@@ -389,12 +387,6 @@ void LOG::printCrashLog(Print &outputDev, bool includeCore)
         outputDev.print(rtcCrashLog.buffer); // assumes null terminated
     }
 
-    if (includeCore)
-        printCoreDump(outputDev, savedCrashCount > 0);
-}
-
-void LOG::printCoreDump(Print &outputDev, bool savedCrash)
-{
     if (esp_core_dump_image_check() == ESP_OK)
     {
         esp_core_dump_summary_t *summary = static_cast<esp_core_dump_summary_t *>(malloc(sizeof(esp_core_dump_summary_t)));
@@ -402,13 +394,13 @@ void LOG::printCoreDump(Print &outputDev, bool savedCrash)
         {
             if (esp_core_dump_get_summary(summary) == ESP_OK)
             {
-                if (!savedCrash)
+                if (savedCrashCount <= 0)
                     outputDev.print("No saved message log available.\n");
 
                 outputDev.print("\n\n");
                 outputDev.printf("Crash in task: %s, at address: 0x%08lX\n", summary->exc_task, summary->exc_pc);
                 outputDev.print("Decode backtrace with this Linux command:\n\n");
-                if (savedCrash)
+                if (savedCrashCount > 0)
                     outputDev.printf("addr2line -p -f -C -e homekit-ratgdo32-v%s.elf \\\n", crashVersion);
                 else
                     outputDev.print("addr2line -p -f -C -e firmware.elf \\\n");
@@ -435,7 +427,6 @@ void LOG::saveMessageLog()
 {
     ESP_LOGI(TAG, "Save message log buffer");
     TAKE_MUTEX();
-    ++diagnosticRevision;
     size_t len = sizeof(rtcRebootLog.buffer);
     uint32_t end = (msgBuffer->head + 1) % sizeof(msgBuffer->buffer); // include the null terminator
     uint32_t start = (sizeof(msgBuffer->buffer) + end - len) % sizeof(msgBuffer->buffer);
@@ -512,128 +503,6 @@ void LOG::printSavedLog(Print &outputDev)
 #endif
 }
 
-#ifndef ESP8266
-namespace {
-// Formatting writes only the requested window into the existing web scratch
-// buffer. Retained RTC bytes are skipped by offset, never copied in full.
-class DiagnosticWindow : public Print
-{
-    uint8_t *output;
-    size_t capacity, offset;
-public:
-    size_t used = 0, total = 0;
-    DiagnosticWindow(uint8_t *out, size_t limit, size_t skip) : output(out), capacity(limit), offset(skip) {}
-    using Print::write;
-    size_t write(uint8_t value) override { return write(&value, 1); }
-    size_t write(const uint8_t *data, size_t length) override
-    {
-        const size_t skip = total < offset ? std::min(length, offset - total) : 0;
-        const size_t copied = std::min(length - skip, capacity - used);
-        if (copied) memcpy(output + used, data + skip, copied);
-        used += copied;
-        total += length;
-        return length;
-    }
-};
-}
-
-void LOG::beginDiagnosticLog(DiagnosticCursor &cursor, bool crash)
-{
-    TAKE_MUTEX();
-    cursor = DiagnosticCursor{};
-    cursor.crash = crash;
-    cursor.savedCrash = crashCount > 0;
-    cursor.revision = diagnosticRevision;
-    GIVE_MUTEX();
-}
-
-size_t LOG::readDiagnosticLog(DiagnosticCursor &cursor, uint8_t *out, size_t capacity, bool &changed)
-{
-    changed = false;
-    for (unsigned part = 0; part < 2 && cursor.stage < 2; ++part)
-    {
-        TAKE_MUTEX();
-        changed = cursor.revision != diagnosticRevision;
-        GIVE_MUTEX();
-        if (changed) return 0;
-        DiagnosticWindow window(out, capacity, cursor.offset);
-        if (!cursor.crash)
-            printSavedLog(window);
-        else if (cursor.stage == 0)
-            printCrashLog(window, false);
-        else
-            printCoreDump(window, cursor.savedCrash);
-        TAKE_MUTEX();
-        changed = cursor.revision != diagnosticRevision;
-        GIVE_MUTEX();
-        if (changed) return 0;
-        cursor.offset += window.used;
-        if (window.total <= cursor.offset)
-        {
-            cursor.offset = 0;
-            cursor.stage = cursor.crash && cursor.stage == 0 ? 1 : 2;
-        }
-        if (window.used) return window.used;
-    }
-    return 0;
-}
-
-void LOG::beginMessageLog(MessageCursor &cursor)
-{
-    TAKE_MUTEX();
-    cursor = MessageCursor{};
-    if (msgBuffer)
-    {
-        cursor.end = logAppendBytes;
-        const size_t capacity = sizeof(msgBuffer->buffer);
-        const size_t saved = msgBuffer->wrapped ? capacity - 1 : msgBuffer->head;
-        cursor.next = cursor.end - saved;
-        cursor.index = msgBuffer->wrapped ? (msgBuffer->head + 1) % capacity : 0;
-    }
-    GIVE_MUTEX();
-}
-
-size_t LOG::readMessageLog(MessageCursor &cursor, uint8_t *out, size_t capacity, bool &overwritten)
-{
-    overwritten = false;
-    size_t length = 0;
-    TAKE_MUTEX();
-    if (msgBuffer && cursor.next < cursor.end)
-    {
-        const size_t ringSize = sizeof(msgBuffer->buffer);
-        if (logAppendBytes - cursor.next > ringSize - 1)
-            overwritten = true;
-        else
-        {
-            length = static_cast<size_t>(std::min<uint64_t>(capacity, cursor.end - cursor.next));
-            const size_t first = std::min(length, ringSize - cursor.index);
-            memcpy(out, msgBuffer->buffer + cursor.index, first);
-            if (first < length) memcpy(out + first, msgBuffer->buffer, length - first);
-            cursor.index = (cursor.index + length) % ringSize;
-            cursor.next += length;
-        }
-    }
-    GIVE_MUTEX();
-    return length;
-}
-
-void LOG::printMessageLogHeader(Print &outputDev)
-{
-    if (clockSet)
-    {
-        time_t now = time(NULL);
-        outputDev.printf_P(PSTR("Server boot time: %llu (%s)\n"), lastRebootAt, timeString(lastRebootAt));
-        outputDev.printf_P(PSTR("Server log time: %llu (%s)\n"), now, timeString(now));
-    }
-    outputDev.printf_P(PSTR("Server uptime: %llu ms (%s)\n"), (int64_t)_millis(), toHHMMSSmmm(_millis()));
-    outputDev.println("Firmware version: " AUTO_VERSION);
-    outputDev.printf_P(PSTR("Free heap: %d\nMinimum heap: %d\n"), free_heap, min_heap);
-    if (doorControlType == DOOR_CONTROL_SEC_PLUS_V2)
-        outputDev.printf_P(PSTR("GDO Firmware version: %s\n"), gdoFirmwareVersion);
-    outputDev.println();
-}
-#endif
-
 void LOG::printMessageLog(Print &outputDev, bool slow)
 {
 #ifndef ESP8266
@@ -688,23 +557,22 @@ void LOG::printMessageLog(Print &outputDev, bool slow)
 
 #ifdef ESP8266
     // Single threaded; preserve the existing IRAM output path.
-    const logBuffer *buffer = msgBuffer;
-    if (buffer)
+    if (msgBuffer)
     {
         // +1 head points to a zero (null terminator of previous log line) which we need to skip.
         // +3 want to round up to multiple of 4
-        size_t start = ((buffer->head + 1 + 3) & ~0x03) % sizeof(buffer->buffer);
-        size_t len = sizeof(buffer->buffer) - start;
+        size_t start = ((msgBuffer->head + 1 + 3) & ~0x03) % sizeof(msgBuffer->buffer);
+        size_t len = sizeof(msgBuffer->buffer) - start;
         // On slow output devices (e.g. network), chunk up to protect against buffer overflow
-        size_t CHUNK = (slow) ? TCP_SND_BUF / 2 : sizeof(buffer->buffer);
+        size_t CHUNK = (slow) ? TCP_SND_BUF / 2 : sizeof(msgBuffer->buffer);
         size_t chunk;
-        if (buffer->wrapped != 0)
+        if (msgBuffer->wrapped != 0)
         {
             while (len)
             {
                 chunk = std::min(len, CHUNK);
                 YIELD();
-                outputDev.write(&buffer->buffer[start], chunk);
+                outputDev.write(&msgBuffer->buffer[start], chunk);
                 if (slow)
                     outputDev.flush();
                 len -= chunk;
@@ -712,12 +580,12 @@ void LOG::printMessageLog(Print &outputDev, bool slow)
             }
         }
         start = 0;
-        len = strlen(buffer->buffer); // must be null terminated
+        len = strlen(msgBuffer->buffer); // must be null terminated
         while (len)
         {
             chunk = std::min(len, CHUNK);
             YIELD();
-            outputDev.write(&buffer->buffer[start], chunk);
+            outputDev.write(&msgBuffer->buffer[start], chunk);
             outputDev.flush();
             len -= chunk;
             start += chunk;

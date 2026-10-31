@@ -139,32 +139,8 @@ public:
     void printSavedLog(File file, Print &outputDev, bool slow = true);
 #endif
     void printMessageLog(Print &outDevice = Serial, bool slow = true);
-#ifndef ESP8266
-    struct MessageCursor
-    {
-        uint64_t next = 0, end = 0;
-        size_t index = 0;
-    };
-    void beginMessageLog(MessageCursor &cursor);
-    size_t readMessageLog(MessageCursor &cursor, uint8_t *out, size_t capacity, bool &overwritten);
-    void printMessageLogHeader(Print &outDevice);
-    struct DiagnosticCursor
-    {
-        size_t offset = 0;
-        uint32_t revision = 0;
-        uint8_t stage = 0;
-        bool crash = false, savedCrash = false;
-    };
-    void beginDiagnosticLog(DiagnosticCursor &cursor, bool crash);
-    size_t readDiagnosticLog(DiagnosticCursor &cursor, uint8_t *out, size_t capacity, bool &changed);
-    void printCoreDump(Print &outDevice, bool savedCrash);
-#endif
     void clearCrashLog();
-#ifdef ESP8266
     void printCrashLog(Print &outDevice = Serial);
-#else
-    void printCrashLog(Print &outDevice = Serial, bool includeCore = true);
-#endif
     void saveMessageLog();
     void disableSerialConsole();
 };

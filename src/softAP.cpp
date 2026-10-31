@@ -15,9 +15,6 @@
 
 // Arduino system includes
 #include <cstring>
-#ifdef ESP32
-#include <atomic>
-#endif
 #include <DNSServer.h>
 
 // RATGDO project includes
@@ -59,16 +56,6 @@ bool wifiNetsCmp(const wifiNet_t &a, const wifiNet_t &b)
     return (a.ssid < b.ssid) || ((a.ssid == b.ssid) && (a.rssi > b.rssi));
 }
 std::multiset<wifiNet_t, decltype(&wifiNetsCmp)> wifiNets(&wifiNetsCmp);
-
-#ifdef ESP32
-// A scanner or result reader owns the registry; nobody waits for its lease.
-static std::atomic<bool> wifiScanOwned{false};
-#endif
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-static std::atomic<bool> wifiScanPending{false};
-static std::atomic<bool> wifiScanRunning{false};
-static std::atomic<bool> wifiScanFailed{false};
-#endif
 
 static bool softAPinitialized = false;
 
@@ -131,13 +118,13 @@ const char *encryptionToString(uint16_t e)
 #endif
 }
 
-static void storeWifiScanResults(int nNets)
+void wifi_scan()
 {
     // scan for networks
     ESP_LOGI(TAG, "Scanning WiFi Networks...");
     wifiNet_t wifiNet;
     wifiNets.clear();
-    nNets = std::min(nNets, 127);
+    int nNets = std::min((int)WiFi.scanNetworks(), 127);
     if (nNets == 0)
     {
         ESP_LOGI(TAG, "No networks found!");
@@ -161,95 +148,9 @@ static void storeWifiScanResults(int nNets)
             wifiNets.insert(wifiNet);
         }
     }
-}
-
-bool wifi_scan(bool retainResults)
-{
-#ifdef ESP32
-    bool expected = false;
-    if (!wifiScanOwned.compare_exchange_strong(expected, true))
-    {
-#if defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-        if (!retainResults)
-            wifiScanPending = true;
-#endif
-        return false;
-    }
-#if defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    wifiScanPending = false;
-#endif
-#endif
-    const int count = WiFi.scanNetworks();
-    if (count >= 0)
-        storeWifiScanResults(count);
+    // delete scan from memory
     WiFi.scanDelete();
-#ifdef ESP32
-#if defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    wifiScanFailed = count < 0;
-#endif
-    if (!retainResults || count < 0)
-        wifiScanOwned = false;
-#else
-    (void)retainResults;
-#endif
-    return count >= 0;
 }
-
-bool acquire_wifi_scan_results()
-{
-#ifdef ESP32
-#if defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    if (wifiScanPending || wifiScanRunning || wifiScanFailed)
-        return false;
-#endif
-    bool expected = false;
-    return wifiScanOwned.compare_exchange_strong(expected, true);
-#else
-    return true;
-#endif
-}
-
-void release_wifi_scan_results()
-{
-#ifdef ESP32
-    wifiScanOwned = false;
-#endif
-}
-
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-static void pollWifiScan()
-{
-    int count;
-    if (wifiScanRunning)
-    {
-        count = WiFi.scanComplete();
-        if (count == WIFI_SCAN_RUNNING)
-            return;
-    }
-    else
-    {
-        if (!wifiScanPending)
-            return;
-        bool expected = false;
-        if (!wifiScanOwned.compare_exchange_strong(expected, true))
-            return;
-        wifiScanPending = false;
-        wifiScanFailed = false;
-        count = WiFi.scanNetworks(true);
-        if (count == WIFI_SCAN_RUNNING)
-        {
-            wifiScanRunning = true;
-            return;
-        }
-    }
-    if (count >= 0)
-        storeWifiScanResults(count);
-    WiFi.scanDelete();
-    wifiScanFailed = count < 0;
-    wifiScanRunning = false;
-    wifiScanOwned = false;
-}
-#endif
 
 void start_soft_ap()
 {
@@ -271,9 +172,6 @@ void start_soft_ap()
     dnsServer.start(53, "*", WiFi.softAPIP());
 
     server.onNotFound(handle_softAPweb);
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    setup_http_response_delivery();
-#endif
     server.begin();
     ESP_LOGI(TAG, "Soft AP web server started");
 #ifdef ESP32
@@ -285,15 +183,10 @@ void start_soft_ap()
 
 void soft_ap_loop()
 {
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    pollWifiScan();
-#endif
     if (!softAPinitialized)
         return;
 
-#if !defined(ESP32) || !defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
     server.handleClient();
-#endif
 
     if (!softAPmode)
         return;
@@ -423,16 +316,8 @@ void handle_softAPweb()
 
 void handle_rescan()
 {
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    if (!wifiScanRunning)
-        wifiScanPending = true;
-    server.send_P(202, type_txt, "Scan pending.");
-#else
-    if (wifi_scan())
-        server.send_P(200, type_txt, "Scan complete.");
-    else
-        server.send_P(503, type_txt, "WiFi scan failed.");
-#endif
+    wifi_scan();
+    server.send_P(200, type_txt, "Scan complete.");
 }
 
 void handle_wifiap()
@@ -490,105 +375,8 @@ static void htmlEscape(const char *in, char *out, size_t outLen)
     out[o] = 0;
 }
 
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-struct WifiScanPageCursor
-{
-    decltype(wifiNets)::const_iterator next;
-    String previousSSID, currentSSID;
-    int index = 0;
-    uint8_t stage = 0;
-    bool match = false;
-};
-static WifiScanPageCursor wifiScanPage;
-
-static void finishWifiScanPage()
-{
-    wifiScanOwned = false;
-}
-
-static size_t readWifiScanPage(uint8_t *buffer, size_t capacity)
-{
-    char *out = reinterpret_cast<char *>(buffer);
-    char escapedSSID[192];
-    int length = 0;
-    if (wifiScanPage.stage == 0)
-    {
-        ++wifiScanPage.stage;
-        length = snprintf(out, capacity, "%s", softAPhttpPreamble);
-    }
-    else if (wifiScanPage.stage == 1)
-    {
-        ++wifiScanPage.stage;
-        length = snprintf(out, capacity, "%s", softAPtableHead);
-    }
-    else if (wifiScanPage.stage == 2 && wifiScanPage.next != wifiNets.cend())
-    {
-        const wifiNet_t &net = *wifiScanPage.next++;
-        bool matchSSID = wifiScanPage.previousSSID == net.ssid;
-        wifiScanPage.match = wifiScanPage.match || matchSSID;
-        const bool hide = wifiScanPage.currentSSID == net.ssid;
-        if (!hide)
-            wifiScanPage.currentSSID = net.ssid;
-        else
-            matchSSID = false;
-        htmlEscape(net.ssid.c_str(), escapedSSID, sizeof(escapedSSID));
-        const int i = wifiScanPage.index++;
-        length = snprintf(out, capacity, softAPtableRow, hide ? "class='adv'" : "", i, i,
-                          matchSSID ? "checked='checked'" : "", i, escapedSSID, net.rssi, net.channel,
-                          net.bssid[0], net.bssid[1], net.bssid[2], net.bssid[3], net.bssid[4], net.bssid[5]);
-    }
-    else if (wifiScanPage.stage == 2)
-    {
-        ++wifiScanPage.stage;
-        htmlEscape(wifiScanPage.match ? "" : wifiScanPage.previousSSID.c_str(), escapedSSID, sizeof(escapedSSID));
-        length = snprintf(out, capacity, softAPtableLastRow, wifiScanPage.index, wifiScanPage.index, escapedSSID);
-    }
-    else if (wifiScanPage.stage == 3)
-    {
-        ++wifiScanPage.stage;
-        length = snprintf(out, capacity, "\n");
-    }
-    else
-        return 0;
-    return length >= 0 && static_cast<size_t>(length) < capacity ? static_cast<size_t>(length) : SIZE_MAX;
-}
-#endif
-
 void handle_wifinets()
 {
-#if defined(ESP32) && defined(RATGDO_HTTP_LIFECYCLE_EXPERIMENT)
-    if (wifiScanPending || wifiScanRunning)
-    {
-        server.send_P(202, type_txt, PSTR("Scan pending."));
-        return;
-    }
-    if (wifiScanFailed)
-    {
-        server.send_P(503, type_txt, PSTR("WiFi scan failed; request a new scan."));
-        return;
-    }
-    bool expected = false;
-    if (!wifiScanOwned.compare_exchange_strong(expected, true))
-    {
-        server.send_P(503, type_txt, PSTR("WiFi scan registry is busy"));
-        return;
-    }
-    wifiScanPage = WifiScanPageCursor{};
-    wifiScanPage.next = wifiNets.cbegin();
-    if (WiFi.isConnected())
-        wifiScanPage.previousSSID = WiFi.SSID();
-    server.client().setNoDelay(true);
-    if (defer_http_generated_body(readWifiScanPage, finishWifiScanPage))
-        return;
-    finishWifiScanPage(); // Non-reactor callers retain synchronous delivery.
-#endif
-
-    WifiScanResults results;
-    if (!results.acquire())
-    {
-        server.send_P(503, type_txt, PSTR("WiFi scan results busy or unavailable; retry later."));
-        return;
-    }
     bool connected = WiFi.isConnected();
     String previousSSID = "";
     bool match = false;
@@ -598,20 +386,13 @@ void handle_wifinets()
     }
     ESP_LOGI(TAG, "Number of WiFi networks: %d", wifiNets.size());
     String currentSSID = "";
-    char *txtBuffer = static_cast<char *>(malloc(TXT_BUFFER_SIZE));
-#define ESCAPED_SSID_SIZE 192
-    char *escapedSSID = static_cast<char *>(malloc(ESCAPED_SSID_SIZE));
-    if (!txtBuffer || !escapedSSID)
-    {
-        free(escapedSSID);
-        free(txtBuffer);
-        server.send_P(503, type_txt, PSTR("Insufficient memory for WiFi scan page"));
-        return;
-    }
     server.client().setNoDelay(true);
     server.sendContent(softAPhttpPreamble, strlen(softAPhttpPreamble));
     server.sendContent(softAPtableHead, strlen(softAPtableHead));
     int i = 0;
+    char *txtBuffer = static_cast<char *>(malloc(TXT_BUFFER_SIZE));
+#define ESCAPED_SSID_SIZE 192
+    char *escapedSSID = static_cast<char *>(malloc(ESCAPED_SSID_SIZE));
     for (wifiNet_t net : wifiNets)
     {
         bool hide = true;
@@ -658,32 +439,19 @@ void handle_setssid()
     bool advanced = server.arg("advanced").equals("on");
     wifiNet_t wifiNet;
 
+    if (net < wifiNets.size())
     {
-        WifiScanResults results;
-        if (!results.acquire())
-        {
-            server.send_P(503, type_txt, PSTR("WiFi scan results busy or unavailable; retry later."));
-            return;
-        }
-        if (net < wifiNets.size())
-        {
-            // User selected network from within scanned range
-            wifiNet = *std::next(wifiNets.begin(), net);
-            ssid = wifiNet.ssid;
-        }
-        else
-        {
-            // Outside scanned range, do not allow locking to access point
-            advanced = false;
-        }
-    } // The selected network is now copied; release before reconfiguration.
+        // User selected network from within scanned range
+        wifiNet = *std::next(wifiNets.begin(), net);
+        ssid = wifiNet.ssid;
+    }
+    else
+    {
+        // Outside scanned range, do not allow locking to access point
+        advanced = false;
+    }
 
     char *txtBuffer = static_cast<char *>(malloc(TXT_BUFFER_SIZE));
-    if (!txtBuffer)
-    {
-        server.send_P(503, type_txt, PSTR("Insufficient memory to change WiFi settings"));
-        return;
-    }
     if (advanced)
     {
         ESP_LOGI(TAG, "Requested WiFi SSID: %s (%d) at AP: %02x:%02x:%02x:%02x:%02x:%02x",

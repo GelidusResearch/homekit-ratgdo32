@@ -21,54 +21,13 @@ def function(source, declaration):
 
 
 class OtaUpload(unittest.TestCase):
-    def test_esp8266_recovery_deadline_wrap(self):
-        source = (ROOT / "src/web.cpp").read_text()
-        recovery = source[source.index("static bool otaServicesStopped"):
-                          source.index("// Common HTTP responses")]
-        harness = r'''
-#include <cassert>
-#include <cstdint>
-#define ESP8266 1
-#define ESP_LOGW(...) ((void)0)
-using _millis_t=uint32_t;
-uint32_t now=0;
-uint32_t _millis() { return now; }
-struct Server { unsigned stops=0; void stop() { ++stops; } } server;
-unsigned restarts=0;
-void sync_and_restart() { ++restarts; }
-''' + recovery + r'''
-int main() {
-    now=UINT32_MAX-500;
-    otaRecoveryPending=true;
-    otaRecoveryAt=now+OTA_FAILURE_RESTART_MS;
-    assert(!recoverStoppedOTAServices());
-    now=otaRecoveryAt-1; assert(!recoverStoppedOTAServices());
-    now=otaRecoveryAt; assert(recoverStoppedOTAServices());
-    assert(restarts==1 && server.stops==1);
-    otaRecoveryPending=true; otaRecoveryAt=now+OTA_STAGED_RESTART_MS;
-    assert(!recoverStoppedOTAServices());
-    now=otaRecoveryAt; otaUploadActive=true;
-    assert(!recoverStoppedOTAServices());
-    otaUploadActive=false; assert(recoverStoppedOTAServices());
-    assert(restarts==2);
-}
-'''
-        with tempfile.TemporaryDirectory() as temporary:
-            cpp = Path(temporary) / "ota-recovery.cpp"
-            binary = Path(temporary) / "ota-recovery"
-            cpp.write_text(harness)
-            subprocess.run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
-                            "-Wno-unused-variable", "-fsanitize=address,undefined",
-                            str(cpp), "-o", str(binary)], check=True)
-            subprocess.run([str(binary)], check=True)
-
     def test_actual_callback_pause_cleanup_and_md5_ownership(self):
         source = (ROOT / "src/web.cpp").read_text()
-        callback = function(source, "static int requestHex(") + function(source, "static bool readFirmwareSize(") + function(source, "void handle_firmware_upload()\n{")
+        callback = function(source, "void handle_firmware_upload()\n{")
         recovery = source[source.index("static bool otaServicesStopped"):
                           source.index("// Common HTTP responses")]
         loop_start = source.index("void web_loop()\n{")
-        loop_prefix = source[loop_start:source.index("// Poll heartbeat deadlines", loop_start)] + "}\n"
+        loop_prefix = source[loop_start:source.index("// Timer callbacks only signal work", loop_start)] + "}\n"
         harness = r'''
 #include <cassert>
 #include <atomic>
@@ -142,8 +101,7 @@ size_t strlcpy(char *to,const char *from,size_t size) {
     size_t n=strlen(from); if (size) { size_t copy=n<size-1?n:size-1; memcpy(to,from,copy);to[copy]=0; }return n;
 }
 struct Esp {
-    uint32_t freeSpace=0x200000;
-    uint32_t getFreeSketchSpace() { return freeSpace; }
+    uint32_t getFreeSketchSpace() { return 0x200000; }
     uint32_t getFlashChipSpeed() { return 40000000; }
 } ESP;
 struct SerialPort { template<class T> void print(T) {} } Serial;
@@ -170,7 +128,7 @@ struct FlashUpdate {
         ++begins;
         // Oversized images are rejected without stopping the running services.
         if (size<=0x1ff000) assert(!pollCanRun());
-        checksum.clear(); active=beginOk; return beginOk;
+        active=beginOk; return beginOk;
     }
     size_t write(uint8_t *,size_t size) { ++writes; assert(!pollCanRun()); return writeOk?size:0; }
     bool end(bool=false) { ++ends; if (active) assert(!pollCanRun()); active=false; return endOk; }
@@ -181,9 +139,6 @@ void _setUpdaterError() { _updaterError="mock flash error"; }
 bool web_setup_done=true;
 bool httpOwnedPoll() { return !httpOwnedPending; }
 bool drainRetiredSSE() { return true; }
-bool bodyPending=false;
-bool drainHttpBodies() { return bodyPending; }
-bool pollHttpResponses() { return bodyPending; }
 ''' + loop_prefix + callback + r'''
 void event(UploadStatus status) { server.data.status=status; handle_firmware_upload(); }
 void start(bool verify=false) {
@@ -200,10 +155,8 @@ int main() {
     assert(suspend_service_loop && !vehicle_setup_done && !commsRunning);
     assert(otaRecoveryPending);
     now=OTA_STAGED_RESTART_MS-1; web_loop(); assert(restarts==0);
-    bodyPending=true; // Deferred HTTP output must not suppress service recovery.
     now=OTA_STAGED_RESTART_MS; web_loop();
     assert(restarts==1 && server.stops==1 && !otaRecoveryPending);
-    bodyPending=false;
 
     // A verify request extends a successful staging deadline. No reboot can
     // happen from an active callback, even when its old deadline has expired.
@@ -268,38 +221,12 @@ int main() {
     suspend_service_loop=false; commsRunning=true; vehicle_setup_done=true;
     start(true); event(UPLOAD_FILE_END);
     assert(!otaRecoveryPending && commsRunning && vehicle_setup_done && !suspend_service_loop);
-    server.arguments["size"]="99999999";
+    server.arguments["size"]="99999999"; Update.beginOk=false;
     start(); event(UPLOAD_FILE_END);
     assert(!otaRecoveryPending && commsRunning && vehicle_setup_done && !suspend_service_loop);
-
-    // Metadata errors leave services and flash setup untouched.
-    const unsigned priorBegins=Update.begins, priorShutdowns=shutdowns;
-    for (const char *bad : {"0", "-1", "12x", "4294967296", " 128", "1.5"}) {
-        server.arguments["size"]=bad;
-        start(); assert(_updaterError.length() && !otaUploadActive);
-        event(UPLOAD_FILE_WRITE); event(UPLOAD_FILE_END);
-        assert(Update.begins==priorBegins && shutdowns==priorShutdowns);
-    }
-    server.arguments["size"]="128";
-    for (const char *bad : {"abc", "0123456789abcdef0123456789abcdeg01"}) {
-        server.arguments["md5"]=bad;
-        start(); assert(_updaterError.length() && !otaUploadActive);
-        event(UPLOAD_FILE_END);
-        assert(Update.begins==priorBegins && shutdowns==priorShutdowns);
-    }
+    // Each request owns its hash; an omitted hash cannot reuse the previous one.
     server.arguments["md5"]="";
-    for (uint32_t space : {0u, 0xfffu, 0x1000u, 0x1fffu}) {
-        ESP.freeSpace=space; start(); assert(_updaterError=="Not Enough Space");
-        event(UPLOAD_FILE_END);
-        assert(Update.begins==priorBegins && shutdowns==priorShutdowns);
-    }
-    ESP.freeSpace=0x200000;
-    // Legacy requests may omit both fields, without retaining an older hash.
-    server.arguments["size"]="";
-    std::strcpy(firmwareMD5,"0123456789abcdef0123456789abcdef");
-    start(); assert(!_updaterError.length() && firmwareSize==0 && firmwareMD5[0]==0);
-    assert(Update.checksum.empty()); event(UPLOAD_FILE_ABORTED);
-
+    start(true); assert(firmwareMD5[0]=='\0'); event(UPLOAD_FILE_END);
 }
 '''
         with tempfile.TemporaryDirectory() as temporary:

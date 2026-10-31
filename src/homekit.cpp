@@ -1120,9 +1120,7 @@ boolean DEV_GarageDoor::update()
     {
         ESP_LOGD(TAG, "Garage Door Characteristics Update, door target: %s", DOOR_STATE(target->getNewVal()));
         GarageDoorCurrentState state = (target->getNewVal() == target->OPEN) ? open_door() : close_door();
-        // A target write does not clear a physically obstructed beam. The
-        // sensor may not publish another event until its state changes.
-        obstruction->setVal(garage_door.obstructed);
+        obstruction->setVal(false);
         current->setVal(state);
     }
 

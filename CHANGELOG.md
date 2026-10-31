@@ -4,18 +4,7 @@
 
 All notable changes to `homekit-ratgdo32` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
-## v1.4.6 (test candidate) - GRGDO1 reliability audit
-
-* Stream web assets and diagnostic logs without blocking the main loop or copying the full log. Retain response ownership through failed writes and cleanup.
-* Render large Wi-Fi scan pages incrementally, run HTTP rescans asynchronously, and protect scan results through page generation and network selection.
-* Preserve rapid and repeated door targets, admit complete button press/release pairs, and report physical state when commands are rejected. Keep real obstruction state during HomeKit writes.
-* Cancel stale delayed closes, partial-opening stops, and encoder corrections when newer commands replace them. Keep watchdogs tied to observed motion.
-* Remove concurrent timer callback replacement from control, heartbeat, LED, and physical pulse paths. Physical output releases remain independent of the main loop.
-* Recover communications after failed or abandoned OTA uploads. Validate settings and upload metadata before changing configuration or stopping services; handle runtime allocation failures gracefully.
-* Upgrade to Arduino 3.3.12 for upstream multipart parsing fixes, with a minimal local upload-allocation guard pending upstream review.
-* This is a test candidate. Hardware soak and the complete explanation of earlier post-power-cycle symptoms remain pending.
-
-## v1.4.5 (2026-10-31) - GRGDO1 test release
+## v1.4.5 (unreleased) - GRGDO1 reliability candidate
 
 * Remove temporary SSE frame allocations. Send borrowed spans in one nonblocking ESP32 operation and preserve ESP8266 flushing behavior.
 * Prevent logger/core lock deadlocks when lwIP reports errors: core-held callers never wait for the logger mutex or send SSE/syslog traffic back through lwIP.

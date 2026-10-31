@@ -13,6 +13,9 @@
  */
 #ifdef RATGDO_ENCODER
 
+// Arduino includes
+#include <Ticker.h>
+
 // RATGDO project includes
 #include "ratgdo.h"
 #include "config.h"
@@ -70,8 +73,7 @@ static constexpr uint32_t ENC_STOPPED_WATCHDOG_MS = 2000; // Maximum expected ga
 static constexpr int8_t ENC_DIRECTION_CHANGE_THRESHOLD = 3; // Number of consecutive ISR pulses in the opposite direction
                                                             // required to confirm a real direction reversal mid-travel.
 
-static bool enc_correction_stop_pending_ = false;
-static _millis_t enc_correction_stop_at_ = 0;
+static Ticker directionChange = Ticker();
 
 // Grace period for the opener to broadcast a state change after the encoder detects movement.
 // If movement continues without an opener update beyond this threshold, it is attributed to manual operation.
@@ -359,9 +361,10 @@ static void on_encoder_update(int16_t raw)
         enc_intended_dir_ = DIR_NONE; // clear — correction is firing
         ESP_LOGD(TAG, "Wrong direction detected (wanted %s, got %s); stopping door to correct", DIRECTION_STR(intended), DOOR_STATE(instant_motion));
 
-        enc_correction_stop_at_ = _millis() + 500;
-        enc_correction_stop_pending_ = true;
-        // Defer the retry until the loop observes stopped encoder motion.
+        directionChange.detach(); // just in case!
+        directionChange.once_ms(500, []()
+                                { stop_door(); });
+        // Defer the retry to check_encoder_stopped()
         enc_dir_correction_pending_ = true;
         enc_dir_correction_intended_ = intended;
       }
@@ -401,8 +404,9 @@ static void check_encoder_stopped()
   // the encoder has confirmed the door has actually stopped.
   if (enc_dir_correction_pending_)
   {
+    enc_dir_correction_pending_ = false;
     direction_t intended = enc_dir_correction_intended_;
-    cancel_encoder_correction();
+    enc_dir_correction_intended_ = DIR_NONE;
     if (intended == DIR_OPENING)
     {
       ESP_LOGI(TAG, "Direction correction retry: send open");
@@ -616,37 +620,6 @@ void setup_encoder()
   encoder_setup_done = true;
 }
 
-// All correction state is owned by the door-command lock. Public commands,
-// reset and shutdown cancel both the delayed Stop and the later retry.
-void cancel_encoder_correction()
-{
-  enc_correction_stop_pending_ = false;
-  enc_dir_correction_pending_ = false;
-  enc_dir_correction_intended_ = DIR_NONE;
-  enc_intended_dir_ = DIR_NONE;
-}
-
-static void process_encoder_correction()
-{
-  if (!enc_correction_stop_pending_)
-    return;
-#ifdef ESP8266
-  if (static_cast<int32_t>(_millis() - enc_correction_stop_at_) < 0)
-#else
-  if (_millis() < enc_correction_stop_at_)
-#endif
-    return;
-  const direction_t intended = enc_dir_correction_intended_;
-  // stop_door() cancels explicit old intents. Preserve only this correction's
-  // retry, while holding the command lock across dispatch and restoration.
-  cancel_encoder_correction();
-  stop_door();
-  enc_dir_correction_pending_ = true;
-  enc_dir_correction_intended_ = intended;
-  enc_last_pulse_ms_ = _millis();
-  enc_watchdog_armed_ = true;
-}
-
 void encoder_loop()
 {
   if (!encoder_setup_done)
@@ -668,8 +641,6 @@ void encoder_loop()
       on_encoder_update((int16_t)(enc_last_ + delta));
   }
 
-  process_encoder_correction();
-
   // Stopped watchdog
   // Re-read _millis() here rather than reusing the stale `now` captured at the
   // top of this function, since on_encoder_update() above may have taken
@@ -682,7 +653,7 @@ void encoder_loop()
   }
 }
 
-void reset_encoder_cal_locked()
+void reset_encoder_cal()
 {
   noInterrupts();
   enc_delta = 0;
@@ -697,7 +668,7 @@ void reset_encoder_cal_locked()
   enc_travel_dir_ = DIR_NONE;
   enc_reverse_count_ = 0;
   enc_intended_dir_ = DIR_NONE;
-  cancel_encoder_correction();
+  enc_dir_correction_pending_ = false;
   enc_watchdog_armed_ = false;
 
   EncCalBlob b = {};

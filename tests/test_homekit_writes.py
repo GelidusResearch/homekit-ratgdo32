@@ -1,6 +1,5 @@
 """Compile the actual garage callback with inert actuator stubs."""
 from pathlib import Path
-import os
 import shutil
 import subprocess
 import tempfile
@@ -20,7 +19,6 @@ using boolean = bool;
 #define ESP_LOGI(...) ((void)0)
 enum GarageDoorCurrentState { OPENING = 2, CLOSING = 3 };
 int opens = 0, closes = 0, locks = 0;
-struct GarageDoor { bool obstructed = false; } garage_door;
 GarageDoorCurrentState open_door() { ++opens; return OPENING; }
 GarageDoorCurrentState close_door() { ++closes; return CLOSING; }
 void set_lock(bool) { ++locks; }
@@ -63,12 +61,6 @@ int main() {
     assert(current.value == OPENING && obstruction.value == 0);
     check(true, Value::CLOSED, false, 2, true, 0, 1, 0);
     assert(current.value == CLOSING);
-    garage_door.obstructed = true;
-    check(true, Value::CLOSED, false, 2, true, 0, 1, 0);
-    assert(obstruction.value == 1);
-    check(true, Value::OPEN, false, 2, true, 1, 0, 0);
-    assert(obstruction.value == 1);
-    garage_door.obstructed = false;
     check(true, Value::CLOSED, true, 2, true, 0, 1, 1);
     check(false, Value::OPEN, true, 3, false, 0, 0, 0);
     check(false, Value::OPEN, true, 2, false, 0, 0, 0);
@@ -80,7 +72,7 @@ class HomeKitWritesTest(unittest.TestCase):
     def test_only_explicit_writes_can_actuate(self):
         compiler = shutil.which("c++")
         self.assertIsNotNone(compiler)
-        body = callback(Path(os.environ.get("HOMEKIT_TEST_SOURCE", "src/homekit.cpp")).read_text())
+        body = callback(Path("src/homekit.cpp").read_text())
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "homekit-writes.cpp"
             binary = Path(directory) / "homekit-writes"

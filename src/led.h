@@ -14,12 +14,7 @@
 #include <stdint.h>
 
 // Arduino includes
-#ifdef ESP32
-#include <atomic>
-#include <esp_timer.h>
-#else
 #include <Ticker.h>
-#endif
 
 #define FLASH_MS 500 // default flash period, 500ms
 #define FLASH_ACTIVITY_MS 250
@@ -33,19 +28,11 @@ private:
     uint8_t activeState = 1;
     uint8_t idleState = 0; // opposite of active
     uint8_t currentState = 0;
-#ifdef ESP32
-    esp_timer_handle_t flashTimer = nullptr;
-    bool flashTimerSetup = false; // Only touched by the single-threaded setup path.
-    std::atomic<bool> flashPending{false};
-    static void flashExpired(void *arg);
-#else
     Ticker LEDtimer;
-#endif
     void (*stateChangeCallback)(bool) = nullptr;
 
 public:
     explicit LED(uint8_t gpio_num, uint8_t state = 1);
-    bool setupFlashTimer(); // Call once during setup, before flash producers start.
     void on();
     void off();
     void idle();

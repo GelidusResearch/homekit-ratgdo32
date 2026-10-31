@@ -282,8 +282,6 @@ public:
     int32_t read(const std::string &constKey, const int32_t dflt);
     int32_t read(const std::string &constKey) { return read(constKey, (int32_t)0); };
     std::string read(const std::string &constKey, const char *dflt);
-    // Caller frees the result. Missing keys use dflt; read/allocation failures return nullptr.
-    char *readAllocatedString(const char *key, const char *dflt);
     bool write(const std::string &constKey, const int32_t value, bool commit);
     bool write(const std::string &constKey, const int32_t value) { return write(constKey, value, true); };
     bool write(const std::string &constKey, const char *value, bool commit);
