@@ -24,6 +24,10 @@ class OtaUpload(unittest.TestCase):
     def test_actual_callback_pause_cleanup_and_md5_ownership(self):
         source = (ROOT / "src/web.cpp").read_text()
         callback = function(source, "void handle_firmware_upload()\n{")
+        recovery = source[source.index("static bool otaServicesStopped"):
+                          source.index("// Common HTTP responses")]
+        loop_start = source.index("void web_loop()\n{")
+        loop_prefix = source[loop_start:source.index("// Timer callbacks only signal work", loop_start)] + "}\n"
         harness = r'''
 #include <cassert>
 #include <atomic>
@@ -36,9 +40,12 @@ class OtaUpload(unittest.TestCase):
 #include <shared_mutex>
 #include <string>
 #define ESP32 1
+#define RATGDO_HTTP_LIFECYCLE_EXPERIMENT 1
+#define RATGDO32_DISCO 1
 #define PSTR(x) x
 #define ESP_LOGI(...) ((void)0)
 #define ESP_LOGE(...) ((void)0)
+#define ESP_LOGW(...) ((void)0)
 #define TAKE_MUTEX() ((void)0)
 #define GIVE_MUTEX() ((void)0)
 #define JSON_START(...) ((void)0)
@@ -47,6 +54,10 @@ class OtaUpload(unittest.TestCase):
 #define JSON_REMOVE_NL(...) ((void)0)
 #define snprintf_P snprintf
 using String=std::string;
+using _millis_t=uint64_t;
+_millis_t now=0;
+_millis_t _millis() { return now; }
+bool httpOwnedPending=false;
 constexpr int U_FLASH=0;
 enum UploadStatus { UPLOAD_FILE_START, UPLOAD_FILE_WRITE, UPLOAD_FILE_END, UPLOAD_FILE_ABORTED };
 struct HTTPUpload {
@@ -56,6 +67,8 @@ struct HTTPUpload {
     uint8_t buf[64]{};
 };
 struct HttpServer {
+    unsigned stops=0;
+    void stop() { ++stops; }
     HTTPUpload data;
     std::map<String,String> arguments{{"action","update"},{"size","128"},
                                     {"md5","0123456789abcdef0123456789abcdef"}};
@@ -79,8 +92,11 @@ String _updaterError;
 size_t firmwareSize=0;
 char firmwareMD5[33]{};
 bool suspend_service_loop=false;
+bool vehicle_setup_done=true, commsRunning=true;
 unsigned shutdowns=0;
-void shutdown_comms() { ++shutdowns; assert(!pollCanRun()); }
+void shutdown_comms() { ++shutdowns; commsRunning=false; assert(!pollCanRun()); }
+unsigned restarts=0;
+void sync_and_restart() { assert(pollCanRun()); ++restarts; }
 size_t strlcpy(char *to,const char *from,size_t size) {
     size_t n=strlen(from); if (size) { size_t copy=n<size-1?n:size-1; memcpy(to,from,copy);to[copy]=0; }return n;
 }
@@ -108,13 +124,22 @@ struct FlashUpdate {
     bool beginOk=true, writeOk=true, endOk=true, active=false;
     unsigned begins=0, writes=0, ends=0;
     String checksum;
-    bool begin(size_t,int) { ++begins; assert(!pollCanRun()); active=beginOk; return beginOk; }
+    bool begin(size_t size,int) {
+        ++begins;
+        // Oversized images are rejected without stopping the running services.
+        if (size<=0x1ff000) assert(!pollCanRun());
+        active=beginOk; return beginOk;
+    }
     size_t write(uint8_t *,size_t size) { ++writes; assert(!pollCanRun()); return writeOk?size:0; }
     bool end(bool=false) { ++ends; if (active) assert(!pollCanRun()); active=false; return endOk; }
     void setMD5(const char *value) { checksum=value; }
 } Update;
 void _setUpdaterError() { _updaterError="mock flash error"; }
-''' + callback + r'''
+''' + recovery + r'''
+bool web_setup_done=true;
+bool httpOwnedPoll() { return !httpOwnedPending; }
+bool drainRetiredSSE() { return true; }
+''' + loop_prefix + callback + r'''
 void event(UploadStatus status) { server.data.status=status; handle_firmware_upload(); }
 void start(bool verify=false) {
     server.arguments["action"]=verify?"verify":"update";
@@ -127,6 +152,29 @@ int main() {
     event(UPLOAD_FILE_WRITE); assert(!pollCanRun());
     event(UPLOAD_FILE_END); assert(pollCanRun());
     event(UPLOAD_FILE_END); assert(pollCanRun());
+    assert(suspend_service_loop && !vehicle_setup_done && !commsRunning);
+    assert(otaRecoveryPending);
+    now=OTA_STAGED_RESTART_MS-1; web_loop(); assert(restarts==0);
+    now=OTA_STAGED_RESTART_MS; web_loop();
+    assert(restarts==1 && server.stops==1 && !otaRecoveryPending);
+
+    // A verify request extends a successful staging deadline. No reboot can
+    // happen from an active callback, even when its old deadline has expired.
+    start(); event(UPLOAD_FILE_WRITE); event(UPLOAD_FILE_END);
+    const auto oldDeadline=otaRecoveryAt;
+    now=oldDeadline-1; start(true); assert(otaRecoveryPending && otaUploadActive);
+    now=oldDeadline+500; assert(!recoverStoppedOTAServices());
+    event(UPLOAD_FILE_END); assert(otaRecoveryPending);
+    assert(otaRecoveryAt==now+OTA_STAGED_RESTART_MS);
+
+    // A disconnected/aborted transfer recovers quickly, only after the core
+    // callback is quiescent and HomeSpan's pause has been released.
+    start(); event(UPLOAD_FILE_ABORTED);
+    assert(otaRecoveryAt==now+OTA_FAILURE_RESTART_MS && pollCanRun());
+    now=otaRecoveryAt; httpOwnedPending=true;
+    assert(!recoverStoppedOTAServices() && restarts==1);
+    httpOwnedPending=false; assert(recoverStoppedOTAServices());
+    assert(restarts==2);
 
     // A failed progress stream retires without interrupting flash writes.
     start();
@@ -160,6 +208,22 @@ int main() {
     event(UPLOAD_FILE_WRITE); event(UPLOAD_FILE_END); assert(pollCanRun());
     assert(shutdowns==before);
     authenticated=true; start(); event(UPLOAD_FILE_ABORTED); assert(pollCanRun());
+
+    // Rejected authentication cannot cancel an already armed recovery.
+    const auto recoveryDeadline=otaRecoveryAt;
+    authenticated=false; start();
+    assert(otaRecoveryPending && otaRecoveryAt==recoveryDeadline);
+    authenticated=true;
+
+    // Verify-only and oversize requests that never stopped services must not
+    // cause a reboot, even if an older Update error remains set.
+    otaServicesStopped=false; otaRecoveryPending=false;
+    suspend_service_loop=false; commsRunning=true; vehicle_setup_done=true;
+    start(true); event(UPLOAD_FILE_END);
+    assert(!otaRecoveryPending && commsRunning && vehicle_setup_done && !suspend_service_loop);
+    server.arguments["size"]="99999999"; Update.beginOk=false;
+    start(); event(UPLOAD_FILE_END);
+    assert(!otaRecoveryPending && commsRunning && vehicle_setup_done && !suspend_service_loop);
 }
 '''
         with tempfile.TemporaryDirectory() as temporary:
