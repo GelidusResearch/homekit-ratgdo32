@@ -28,15 +28,13 @@ class StatusByteHeapTest(unittest.TestCase):
 #include "json.h"
 constexpr uint32_t MALLOC_CAP_INTERNAL=1, MALLOC_CAP_8BIT=4;
 unsigned calls=0;
-// ESP32 size_t is 32 bits; match its overload resolution on a 64-bit host.
-using esp32_size_t=uint32_t;
-esp32_size_t heap_caps_get_free_size(uint32_t caps) {
+size_t heap_caps_get_free_size(uint32_t caps) {
     assert(caps==(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)); ++calls; return UINT32_MAX;
 }
-esp32_size_t heap_caps_get_minimum_free_size(uint32_t caps) {
+size_t heap_caps_get_minimum_free_size(uint32_t caps) {
     assert(caps==(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)); ++calls; return UINT32_MAX-1;
 }
-esp32_size_t heap_caps_get_largest_free_block(uint32_t caps) {
+size_t heap_caps_get_largest_free_block(uint32_t caps) {
     assert(caps==(MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)); ++calls; return UINT32_MAX-2;
 }
 int main(int argc,char **argv) {

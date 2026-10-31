@@ -1503,9 +1503,9 @@ void build_status_json(char *json)
 #ifndef ESP8266
     // Byte-addressable internal heap used by mDNS and other SDK allocations.
     constexpr uint32_t byteHeapCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
-    JSON_ADD_INT("freeInternal8Bit", heap_caps_get_free_size(byteHeapCaps));
-    JSON_ADD_INT("minInternal8Bit", heap_caps_get_minimum_free_size(byteHeapCaps));
-    JSON_ADD_INT("largestInternal8Bit", heap_caps_get_largest_free_block(byteHeapCaps));
+    JSON_ADD_INT("freeInternal8Bit", static_cast<uint32_t>(heap_caps_get_free_size(byteHeapCaps)));
+    JSON_ADD_INT("minInternal8Bit", static_cast<uint32_t>(heap_caps_get_minimum_free_size(byteHeapCaps)));
+    JSON_ADD_INT("largestInternal8Bit", static_cast<uint32_t>(heap_caps_get_largest_free_block(byteHeapCaps)));
 #endif
     JSON_ADD_INT("crashCount", abs(crashCount));
     JSON_ADD_BOOL(cfg_staticIP, userConfig->getStaticIP());
