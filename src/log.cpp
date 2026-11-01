@@ -53,28 +53,33 @@ esp_log_level_t logLevel = ESP_LOG_VERBOSE;
     } while (0)
 
 // Allows us to intercept all ESP_LOGx() even outside our code.
-void esp_log_hook(const char *fmt, va_list args)
+int esp_log_hook(const char *fmt, va_list args)
 {
     if (!Serial)
     {
-        // Before we can log anything, we need to initialize the serial port.
-        Serial.begin(115200);
-        while (!Serial)
-            ; // Wait for serial port to open
-        Serial.print("\n\n\n");
+        // Initialize once; with USB CDC the port may not be open yet, so don't block boot waiting for it.
+        static bool serialBegun = false;
+        if (!serialBegun)
+        {
+            Serial.begin(115200);
+            serialBegun = true;
+        }
     }
     if (ratgdoLogger)
     {
         ratgdoLogger->logToBuffer(fmt, args);
+        return 0;
     }
-    else if (!suppressSerialLog)
+    if (!suppressSerialLog)
     {
         // We should only ever come here if ratgdoLogger has not been constructed
         // which would only be in very early part of booting the system
         char buf[64];
-        vsnprintf(buf, 64, fmt, args);
+        int len = vsnprintf(buf, sizeof(buf), fmt, args);
         Serial.print(buf);
+        return len;
     }
+    return 0;
 }
 
 #ifdef ESP8266
@@ -340,6 +345,7 @@ void LOG::printCrashLog(Print &outputDev)
 
                 outputDev.print("\n\n");
                 outputDev.printf("Crash in task: %s, at address: 0x%08lX\n", summary->exc_task, summary->exc_pc);
+#ifdef CONFIG_IDF_TARGET_ARCH_XTENSA
                 outputDev.print("Decode backtrace with this Linux command:\n\n");
                 if (crashCount > 0)
                     outputDev.printf("addr2line -p -f -C -e homekit-ratgdo32-v%s.elf \\\n", crashVersion);
@@ -354,6 +360,17 @@ void LOG::printCrashLog(Print &outputDev)
                 }
                 outputDev.print("\n\n");
                 outputDev.print("Make sure that the ELF file matches the binary that crashed.\n");
+#else
+                // RISC-V: no on-device backtrace; print raw stack dump for offline GDB analysis
+                outputDev.printf("Stack dump (%lu bytes):\n", summary->exc_bt_info.dump_size);
+                for (uint32_t i = 0; i < summary->exc_bt_info.dump_size; i++)
+                {
+                    outputDev.printf("%02X ", summary->exc_bt_info.stackdump[i]);
+                    if (((i + 1) % 16) == 0)
+                        outputDev.print("\n");
+                }
+                outputDev.print("\n");
+#endif
             }
             free(summary);
         }

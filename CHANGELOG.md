@@ -4,7 +4,7 @@
 
 All notable changes to `homekit-ratgdo32` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
-## v1.3.1 (2026-07-16) - Gelidus Research
+## v1.4.0 (2026-07-16) - Gelidus Research
 
 ### What's Changed
 * Bugfix: `lightHomeKit`/`homekitLight` key name mismatch between browser and server. (upstream [#146](https://github.com/ratgdo/homekit-ratgdo32/issues/146))

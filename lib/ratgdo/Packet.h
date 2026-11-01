@@ -507,7 +507,7 @@ const uint8_t CANCEL_TTC_FLAG_MASK = 0x0F;
 const uint8_t CANCEL_TTC_FLAG_SHIFT = 8;
 enum class CancelTtcState : uint8_t
 {
-    Hold = 4,
+    Toggle = 4,
     Cancel = 5,
 };
 struct CancelTtcCommandData
@@ -540,8 +540,8 @@ struct CancelTtcCommandData
         const char *s = "unknown state";
         switch (state)
         {
-        case CancelTtcState::Hold:
-            s = "Holding";
+        case CancelTtcState::Toggle:
+            s = "Toggle";
             break;
         case CancelTtcState::Cancel:
             s = "Cancel";
@@ -709,6 +709,7 @@ struct PacketData
         BatteryCommandData battery;
         SetTtcCommandData set_ttc;
         CancelTtcCommandData cancel_ttc;
+        ToggleTtcCommandData toggle_ttc;
         UpdateTtcCommandData update_ttc;
         Pair2RespCommandData pair2resp;
         Pair3RespCommandData pair3resp;
@@ -762,6 +763,10 @@ struct PacketData
             value.update_ttc.to_string(subbuf, subbuflen);
             snprintf(buf, buflen, "UpdateTtc: [%s]", subbuf);
             break;
+        case PacketDataType::ToggleTtc:
+            value.toggle_ttc.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "ToggleTtc: [%s]", subbuf);
+            break;
         case PacketDataType::Pair2Resp:
             value.pair2resp.to_string(subbuf, subbuflen);
             snprintf(buf, buflen, "Pair2Resp: [%s]", subbuf);
@@ -783,7 +788,8 @@ class PacketCommand
 public:
     enum PacketCommandValue : uint16_t
     {
-        Unknown = 0x000,
+        FirmwareVer = 0x000,
+        FirmwareVerResp = 0x001,
         GetStatus = 0x080,
         Status = 0x081,
         Obst1 = 0x084, // sent when an obstruction happens?
@@ -821,8 +827,12 @@ public:
     {
         switch (cmd)
         {
-        case PacketCommandValue::Unknown:
-            return "UNKNOWN";
+        case PacketCommandValue::FirmwareVer:
+            return "FirmwareVer";
+        case PacketCommandValue::FirmwareVerResp:
+            return "FirmwareVerResp";
+        case PacketCommandValue::GetStatus:
+            return "GetStatus";
         case PacketCommandValue::GetStatus:
             return "GetStatus";
         case PacketCommandValue::Status:
@@ -867,6 +877,8 @@ public:
             return "CancelTtc";
         case PacketCommandValue::UpdateTtc:
             return "UpdateTtc";
+        case PacketCommandValue::ToggleTtc:
+            return "ToggleTtc";
         case PacketCommandValue::GetOpenings:
             return "GetOpenings";
         case PacketCommandValue::Openings:

@@ -330,16 +330,6 @@ bool helperLaser(const std::string &key, const char *value, configSetting *actio
 }
 #endif
 
-#ifdef USE_GDOLIB
-bool helperUseSWserial(const std::string &key, const char *value, configSetting *action)
-{
-    // We must shutdown the GDOLIB tasks before changing the useSWserial setting.
-    gdo_deinit();
-    userConfig->set(key, value);
-    return true;
-}
-#endif
-
 #ifdef ESP32
 bool helperOccupancyDuration(const std::string &key, const char *value, configSetting *action)
 {
@@ -413,8 +403,8 @@ userSettings::userSettings()
     char *credentialsBuf = static_cast<char *>(malloc(36));
     strlcpy(credentialsBuf, "10d3c00fa1e09696601ef113b99f8a87", 36);
 #ifdef USE_DHT22
-    char *dht22TempFormatBuf = static_cast<char *>(malloc(2));
-    strlcpy(dht22TempFormatBuf, "C", 2);
+    char *TemperatureReadFormatBuf = static_cast<char *>(malloc(2));
+    strlcpy(TemperatureReadFormatBuf, "C", 2);
 #endif
     //  key, {reboot, wifiChanged, value, fn to call}
     settings = {
@@ -467,9 +457,6 @@ userSettings::userSettings()
         {cfg_laserHomeKit, {false, false, true, helperLaser}}, // call fn to enable/disable HomeKit accessories
         {cfg_assistDuration, {false, false, 60, NULL}},
 #endif
-#ifdef USE_GDOLIB
-        {cfg_useSWserial, {true, false, true, helperUseSWserial}}, // call fn to shut down GDO before switch
-#endif
         {cfg_builtInTTC, {false, false, 0, helperBuiltInTTC}},
 #ifndef ESP8266
         // These features not available on ESP8266
@@ -481,7 +468,7 @@ userSettings::userSettings()
 #endif
 #ifdef USE_DHT22
         {cfg_dht22Pin, {true, false, -1, NULL}}, // DHT22 sensor GPIO pin, -1 = disabled
-        {cfg_dht22TempFormat, {false, false, (configStr){2, dht22TempFormatBuf}, NULL}}, // "C" or "F"
+        {cfg_TemperatureReadFormat, {false, false, (configStr){2, TemperatureReadFormatBuf}, NULL}}, // "C" or "F"
 #endif
     };
     IRAM_END(TAG);

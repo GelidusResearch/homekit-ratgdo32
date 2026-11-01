@@ -42,9 +42,9 @@ void blink_led(int d, int times)
 {
     for (int j = 0; j < times; j++)
     {
-        digitalWrite(LED_BUILTIN, HIGH);
+        digitalWrite(LED_BUILTIN_PIN, HIGH);
         delay(d);
-        digitalWrite(LED_BUILTIN, LOW);
+        digitalWrite(LED_BUILTIN_PIN, LOW);
         delay(d);
     }
 }
@@ -276,15 +276,23 @@ bool onCommandCallback(improv::ImprovCommand cmd)
             // Firmware name
 #ifdef GRGDO1_V1
             "HomeKit-ratgdo32-rev1",
-#else
+#endif
+#ifdef GRGDO1_V2
             "HomeKit-ratgdo32-rev2",
+#endif
+#ifdef GRGDO1_V3
+            "HomeKit-ratgdo32-rev3",
 #endif
             // Firmware version
             AUTO_VERSION,
             // Hardware chip/variant
+#ifdef GRGDO1_V3
+            "ESP32-C6",
+#else
             "ESP32",
+#endif
             // Device name
-            "Ratgdo32"};
+            "GRGDO1"};
 #endif
         std::vector<uint8_t> data = improv::build_rpc_response(improv::GET_DEVICE_INFO, infos, false);
         send_response(data);

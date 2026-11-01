@@ -55,7 +55,7 @@ extern char default_device_name[DEVICE_NAME_SIZE];
 constexpr char cfg_deviceName[] PROGMEM = "deviceName";
 #ifdef USE_DHT22
 constexpr char cfg_dht22Pin[] PROGMEM = "dht22Pin";
-constexpr char cfg_dht22TempFormat[] PROGMEM = "dht22TempFormat"; // "C" or "F"
+constexpr char cfg_TemperatureReadFormat[] PROGMEM = "TemperatureReadFormat"; // "C" or "F"
 #endif
 constexpr char cfg_wifiChanged[] PROGMEM = "wifiChanged";
 constexpr char cfg_wifiPower[] PROGMEM = "wifiPower";
@@ -90,7 +90,6 @@ constexpr char cfg_dcOpenClose[] PROGMEM = "dcOpenClose";
 constexpr char cfg_dcBypassTTC[] PROGMEM = "dcBypassTTC";
 constexpr char cfg_useToggle[] PROGMEM = "useToggle";
 constexpr char cfg_dcDebounceDuration[] PROGMEM = "dcDebounceDuration";
-constexpr char cfg_useSWserial[] PROGMEM = "useSWserial";
 constexpr char cfg_obstFromStatus[] PROGMEM = "obstFromStatus";
 constexpr char cfg_builtInTTC[] PROGMEM = "builtInTTC";
 #ifdef ESP8266
@@ -219,7 +218,6 @@ public:
     uint32_t getAssistDuration() { return std::get<int>(get(cfg_assistDuration)); };
 #endif
 #ifndef ESP8266
-    bool getUseSWserial() { return std::get<bool>(get(cfg_useSWserial)); };
     uint32_t getOccupancyDuration() { return std::get<int>(get(cfg_occupancyDuration)); };
     bool getEnableIPv6() { return std::get<bool>(get(cfg_enableIPv6)); };
     bool getEnableHomeSpanCLI() { return std::get<bool>(get(cfg_homespanCLI)); };
@@ -228,7 +226,7 @@ public:
 #endif
 #ifdef USE_DHT22
     int getDHT22Pin() { return contains(cfg_dht22Pin) ? std::get<int>(get(cfg_dht22Pin)) : -1; };
-    char *getDHT22TempFormat() { return contains(cfg_dht22TempFormat) ? std::get<configStr>(get(cfg_dht22TempFormat)).str : (char*)"C"; };
+    char *getTemperatureReadFormat() { return contains(cfg_TemperatureReadFormat) ? std::get<configStr>(get(cfg_TemperatureReadFormat)).str : (char*)"C"; };
 #endif
 };
 extern userSettings *userConfig;

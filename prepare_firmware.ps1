@@ -17,6 +17,7 @@ $ErrorActionPreference = "Stop"
 # Define paths
 $BuildDirRev2 = ".pio\build\ratgdo_esp32dev"
 $BuildDirRev1 = ".pio\build\ratgdo_esp32dev_rev1"
+$BuildDirRev3 = ".pio\build\ratgdo_esp32dev_rev3"
 $OutputDir = "docs\firmware"
 
 # Create output directory if it doesn't exist
@@ -88,13 +89,18 @@ Write-Host "="*50
 
 $Success = $true
 
-# Process rev2 (default)
+# Process rev2 (ESP32)
 if (-not (Process-Firmware -SourceDir $BuildDirRev2 -Revision "rev2" -Version $Version)) {
     $Success = $false
 }
 
-# Process rev1
+# Process rev1 (ESP32)
 if (-not (Process-Firmware -SourceDir $BuildDirRev1 -Revision "rev1" -Version $Version)) {
+    $Success = $false
+}
+
+# Process rev3 (ESP32-C6)
+if (-not (Process-Firmware -SourceDir $BuildDirRev3 -Revision "rev3" -Version $Version)) {
     $Success = $false
 }
 

@@ -28,6 +28,10 @@
         }
 
         function confirmDialog(message) {
+            const dialog = document.getElementById("confirmDialog");
+            if (!dialog || typeof dialog.showModal !== 'function') {
+                return Promise.resolve(window.confirm(message));
+            }
             return new Promise((resolve, reject) => {
                 const dialog = document.getElementById("confirmDialog");
                 const confirmMessage = document.getElementById('confirmMessage');

@@ -9,7 +9,7 @@
 <body>
     <h1>Gelidus Research</h1>
     <h1>GRGDO1 WEB installer for HomeKit integrations</h1>
-    <script type="module" src="https://unpkg.com/esp-web-tools@9/dist/web/install-button.js?module&v=1.0.0"></script>
+    <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
     <style type="text/css">
         * {
             font-family: 'Lucida Sans', 'Lucida Sans Regular', 'Lucida Grande', 'Lucida Sans Unicode', Geneva, Verdana, sans-serif;
@@ -31,11 +31,15 @@
     <p>Select the target board version.</p>
     <div>
         <input type="radio" id="v1-board" name="board-version" value="rev1">
-        <label for="v1-board">GRGDO1 v1 board</label>
+        <label for="v1-board">GRGDO1 v1 board (ESP32)</label>
     </div>
     <div>
         <input type="radio" id="v2-board" name="board-version" value="rev2" checked>
-        <label for="v2-board">GRGDO1 v2 board</label>
+        <label for="v2-board">GRGDO1 v2 board (ESP32)</label>
+    </div>
+    <div>
+        <input type="radio" id="v3-board" name="board-version" value="rev3">
+        <label for="v3-board">GRGDO1 v3 board (ESP32-C6)</label>
     </div>
 
    <p>After physically attaching to USB, you can start the flashing process with the CONNECT button:
@@ -73,8 +77,8 @@
 
 					if (firmwareLine.includes('rev1')) {
 						detectedRev = 'rev1';
-					} else if (firmwareLine.includes('rev2')) {
-						detectedRev = 'rev2';
+				} else if (firmwareLine.includes('rev3')) {
+					detectedRev = 'rev3';
 					}
 
 					console.log('Auto-detected hardware revision:', detectedRev);

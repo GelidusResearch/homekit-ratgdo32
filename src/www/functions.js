@@ -140,10 +140,6 @@ function toggleSyslog() {
 
 function toggleDCOpenClose(radio) {
     let value = radio.value;
-    if (serverStatus["useSWserial"] != undefined) {
-        document.getElementById("useSWserialRow").style.display = "table-row";
-        document.getElementById("useSWserial").disabled = (value == 3);
-    }
     document.getElementById("dcOpenClose").disabled = (value == 3);
     document.getElementById("obstFromStatus").disabled = (value == 3);
     document.getElementById("useToggle").disabled = (value != 2);
@@ -399,10 +395,6 @@ function setElementsFromStatus(status) {
                 document.getElementById("doorButton").style.margin = (value != 3) ? "" : "auto"; // auto will center the button
                 document.getElementById("lightButton").style.display = (value != 3) ? "inline-block" : "none";
                 document.getElementById("lockLightRow").style.display = (value != 3) ? "table-row" : "none";
-                if (serverStatus["useSWserial"] != undefined) {
-                    document.getElementById("useSWserialRow").style.display = "table-row";
-                    document.getElementById("useSWserial").disabled = (value == 3);
-                }
                 document.getElementById("dcOpenClose").disabled = (value == 3);
                 document.getElementById("obstFromStatus").disabled = (value == 3);
                 document.getElementById("useToggle").disabled = (value != 2);
@@ -413,7 +405,8 @@ function setElementsFromStatus(status) {
                 toggleHardwiredBypassRow();
                 break;
             case "pinBasedObst":
-                document.getElementById(key).innerHTML = (value == true) ? "&nbsp;(Pin-based)" : "&nbsp;(Message)";
+                //document.getElementById(key).innerHTML = (value == true) ? "&nbsp;(Pin-based)" : "&nbsp;(Message)";
+                document.getElementById(key).innerHTML = (value == true) ? "&nbsp;" : "&nbsp;";
                 break;
             case "garageSec1Emulated":
                 document.getElementById("sec1emulation").style.display = (value == true) ? "" : "none";
@@ -515,7 +508,6 @@ function setElementsFromStatus(status) {
                 break;
             case "laserHomeKit":
             case "useToggle":
-            case "useSWserial":
             case "obstFromStatus":
                 document.getElementById(key).checked = value;
                 break;
@@ -724,31 +716,35 @@ function setElementsFromStatus(status) {
                 document.getElementById(key).innerHTML = value + "&nbsp;Seconds";
                 break;
 
-            case "dht22Temp":
+            case "TemperatureRead":
                 document.getElementById("dht22Row").style.display = "table-row";
-                // Use stored format from serverStatus (set when dht22TempFormat is processed)
-                var tempFormat = serverStatus.dht22TempFormat || "C";
+                // Use stored format from serverStatus (set when TemperatureReadFormat is processed)
+                var tempFormat = serverStatus.TemperatureReadFormat || "C";
                 document.getElementById(key).innerHTML = value.toFixed(1) + "&deg;" + tempFormat;
                 break;
-            case "dht22Hum":
+            case "HumidityRead":
                 document.getElementById("dht22Row").style.display = "table-row";
                 document.getElementById(key).innerHTML = value.toFixed(1) + "%";
                 break;
             case "dht22Pin":
                 document.getElementById(key).value = value;
-                document.getElementById("dht22TempFormatRow").style.display = (value >= 0) ? "table-row" : "none";
+                document.getElementById("TemperatureReadFormatRow").style.display = (value >= 0) ? "table-row" : "none";
                 break;
-            case "dht22TempFormat":
-                serverStatus.dht22TempFormat = value; // Store in serverStatus
+            case "TemperatureReadFormat":
+                serverStatus.TemperatureReadFormat = value; // Store in serverStatus
                 if (value === "F") {
                     document.getElementById("tempFormatF").checked = true;
                 } else {
                     document.getElementById("tempFormatC").checked = true;
                 }
                 // Update temperature display with correct format if temp value exists
-                if (serverStatus.dht22Temp !== undefined) {
-                    document.getElementById("dht22Temp").innerHTML = serverStatus.dht22Temp.toFixed(1) + "&deg;" + value;
+                if (serverStatus.TemperatureRead !== undefined) {
+                    document.getElementById("TemperatureRead").innerHTML = serverStatus.TemperatureRead.toFixed(1) + "&deg;" + value;
                 }
+                break;
+            case "aht20Detected":
+                document.getElementById("aht20Row").style.display = "table-row";
+                document.getElementById("aht20Status").innerHTML = value ? "Detected" : "Not detected";
                 break;
 
             case "freeIramHeap":
@@ -1405,7 +1401,6 @@ async function saveSettings() {
     const dcOpenClose = (document.getElementById("dcOpenClose").checked) ? '1' : '0';
     const dcBypassTTC = (document.getElementById("dcBypassTTC").checked) ? '1' : '0';
     const useToggle = (document.getElementById("useToggle").checked) ? '1' : '0';
-    const useSWserial = (document.getElementById("useSWserial").checked) ? '1' : '0';
     const obstFromStatus = (document.getElementById("obstFromStatus").checked) ? '1' : '0';
 
     let assistDuration = Math.max(Math.min(parseInt(document.getElementById("assistDuration").value), 300), 0);
@@ -1448,7 +1443,7 @@ async function saveSettings() {
 
     let dht22Pin = parseInt(document.getElementById("dht22Pin").value);
     if (isNaN(dht22Pin)) dht22Pin = -1;
-    const dht22TempFormat = (document.getElementById("tempFormatF").checked) ? 'F' : 'C';
+    const TemperatureReadFormat = (document.getElementById("tempFormatF").checked) ? 'F' : 'C';
 
     // check IP addresses valid
     const regexIPv4 = /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/i;
@@ -1496,12 +1491,11 @@ async function saveSettings() {
         "syslogPort", syslogPort,
         "syslogFacility", syslogFacility,
         "logLevel", logLevel,
-        "useSWserial", useSWserial,
         "obstFromStatus", obstFromStatus,
         "dcDebounceDuration", dcDebounceDuration,
         "homespanCLI", homespanCLI,
         "dht22Pin", dht22Pin,
-        "dht22TempFormat", dht22TempFormat,
+        "TemperatureReadFormat", TemperatureReadFormat,
         "lightHomeKit", lightHomeKit,
         "motionHomeKit", motionHomeKit,
     );

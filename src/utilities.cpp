@@ -171,9 +171,15 @@ void printTaskInfo(const char *buf)
         Serial.print("Name                    Core\tPri\tStack\tState\n");
         for (size_t i = 0; i < count; i++)
         {
+            // Single-core targets (e.g. ESP32-C6, CONFIG_FREERTOS_UNICORE) don't have xCoreID in TaskStatus_t
+#if defined(CONFIG_FREERTOS_UNICORE)
+            int coreId = -1;
+#else
+            int coreId = (tasks[i].xCoreID < 16) ? tasks[i].xCoreID : -1;
+#endif
             Serial.printf("%s\t%s\t%4d\t%3d\t%5d\t%s\n", const_cast<char *>(tasks[i].pcTaskName),
                           strlen(const_cast<char *>(tasks[i].pcTaskName)) > 7 ? "" : "\t",
-                          (int)(tasks[i].xCoreID < 16) ? tasks[i].xCoreID : -1,
+                          coreId,
                           (int)tasks[i].uxBasePriority,
                           (int)tasks[i].usStackHighWaterMark,
                           (magic_enum::enum_name(tasks[i].eCurrentState)).data());

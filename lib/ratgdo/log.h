@@ -143,4 +143,4 @@ public:
 };
 extern LOG *ratgdoLogger;
 
-extern void esp_log_hook(const char *fmt, va_list args);
+extern int esp_log_hook(const char *fmt, va_list args);

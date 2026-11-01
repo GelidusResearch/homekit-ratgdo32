@@ -36,6 +36,7 @@
 #include "led.h"
 #include "provision.h"
 #include "softAP.h"
+#include "aht20.h"
 #ifdef ESP8266
 #include "wifi_8266.h"
 #endif
@@ -210,7 +211,7 @@ void setup()
     // Set log to info level so logging within load_all_config_settings() will display
     esp_log_level_set("*", ESP_LOG_INFO);
     // We will intercept calls to standard ESP_LOGx so we can route them through our logger
-    esp_log_set_vprintf((vprintf_like_t)esp_log_hook);
+    esp_log_set_vprintf(esp_log_hook);
     // Load users saved configuration (or set defaults)
     load_all_config_settings();
     // Now set log level to whatever user has requested
@@ -276,6 +277,9 @@ void setup()
 #ifndef USE_GDOLIB
     setup_drycontact();
 #endif
+    // Probe for an auto-detected I2C temperature/humidity sensor before HomeKit
+    // accessories are created, so the service only gets added if one is found.
+    setup_aht20();
 
     // Finally initialize WiFi and HomeKit
 #ifdef ESP8266
@@ -333,11 +337,13 @@ void loop()
         ESP_LOGI(TAG, "Free sys stack at boot:     %d", free_sys_stack_at_boot);
         ESP_LOGI(TAG, "Current minimum sys stack:  %d", free_sys_stack);
 #endif
+#ifndef USE_GDOLIB
         if (doorControlType == 2)
         {
             ESP_LOGI(TAG, "Our ID code %lu (0x%02lX)", id_code, id_code);
             ESP_LOGI(TAG, "Our rolling code %lu (0x%02X)", rolling_code, rolling_code);
         }
+#endif
         ESP_LOGI(TAG, "=== Initialization complete");
 #ifdef RATGDO32_DISCO
         // beep on completing startup.

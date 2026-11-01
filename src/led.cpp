@@ -17,7 +17,7 @@
 // static const char *TAG = "ratgdo-led";
 
 // Construct the singleton object for LED access
-LED led(LED_BUILTIN, LED_BUILTIN_ON_STATE);
+LED led(LED_BUILTIN_PIN, LED_BUILTIN_ON_STATE);
 #ifdef RATGDO32_DISCO
 LED laser(LASER_PIN);
 #endif

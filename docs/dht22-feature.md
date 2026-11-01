@@ -31,8 +31,8 @@ build_flags =
   - `tempHumidity` extern pointer declaration
 
 - **src/config.h**:
-  - `cfg_dht22Pin` and `cfg_dht22TempFormat` configuration constants
-  - `getDHT22Pin()` and `getDHT22TempFormat()` getter methods
+  - `cfg_dht22Pin` and `cfg_TemperatureReadFormat` configuration constants
+  - `getDHT22Pin()` and `getTemperatureReadFormat()` getter methods
 
 ### Implementation Files
 - **src/homekit.cpp**:
@@ -46,10 +46,10 @@ build_flags =
   - DHT22 sensor reading and caching logic
   - Temperature format handling (Celsius/Fahrenheit)
   - HomeKit notification calls
-  - Configuration JSON output (`dht22Pin`, `dht22TempFormat`)
+  - Configuration JSON output (`dht22Pin`, `TemperatureReadFormat`)
 
 - **src/config.cpp**:
-  - `dht22TempFormatBuf` buffer allocation
+  - `TemperatureReadFormatBuf` buffer allocation
   - Settings map entries for DHT22 configuration
 
 ## Dependencies

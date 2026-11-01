@@ -48,6 +48,7 @@
 #include "softAP.h"
 #include "json.h"
 #include "led.h"
+#include "aht20.h"
 #ifdef ESP8266
 #include "wifi_8266.h"
 #endif
@@ -334,53 +335,65 @@ void web_loop()
 
     TAKE_MUTEX();
     JSON_START(json);
-#ifdef USE_DHT22
+#if defined(USE_DHT22) || defined(USE_AHT20)
     // DHT22 sensor read and config
     int dht22Pin = userConfig->contains(cfg_dht22Pin) ? std::get<int>(userConfig->get(cfg_dht22Pin)) : -1;
-    std::string tempFormat = userConfig->contains(cfg_dht22TempFormat) ? std::get<configStr>(userConfig->get(cfg_dht22TempFormat)).str : "C";
-    static float dht22Temp = NAN;
-    static float dht22Hum = NAN;
-    static unsigned long lastDHT22Read = 0;
+    std::string tempFormat = userConfig->contains(cfg_TemperatureReadFormat) ? std::get<configStr>(userConfig->get(cfg_TemperatureReadFormat)).str : "C";
+    static float TemperatureRead = NAN;
+    static float HumidityRead = NAN;
+    static unsigned long lastTemperatureRead = 0;
     static std::string lastTempFormat = "";
-    const unsigned long DHT22_READ_INTERVAL = 60000; // 60 seconds
+    const unsigned long TEMPERATURE_READ_INTERVAL = 60000; // 60 seconds
 
     // Reset cache if temperature format changes
     if (tempFormat != lastTempFormat) {
-        lastDHT22Read = 0;
+        lastTemperatureRead = 0;
         lastTempFormat = tempFormat;
     }
 
-    if (dht22Pin >= 0) {
+    if (dht22Pin >= 0 || aht20_detected) {
         unsigned long currentMillis = millis();
-        // Read sensor initially (lastDHT22Read == 0) or after 60 seconds
-        if (lastDHT22Read == 0 || (currentMillis - lastDHT22Read >= DHT22_READ_INTERVAL)) {
-            static DHT dht(dht22Pin, DHT22);
-            dht.begin();
-            if (tempFormat == "F" || tempFormat == "f") {
-                dht22Temp = dht.readTemperature(true);
+        // Read sensor initially (lastTemperatureRead == 0) or after 60 seconds
+        if (lastTemperatureRead == 0 || (currentMillis - lastTemperatureRead >= TEMPERATURE_READ_INTERVAL)) {
+            if (dht22Pin >= 0) {
+                static DHT dht(dht22Pin, DHT22);
+                dht.begin();
+                if (tempFormat == "F" || tempFormat == "f") {
+                    TemperatureRead = dht.readTemperature(true);
+                } else {
+                    TemperatureRead = dht.readTemperature();
+                }
+                HumidityRead = dht.readHumidity();
             } else {
-                dht22Temp = dht.readTemperature();
+                // No DHT22 pin configured; use the auto-detected AHT20 (I2C) instead.
+                float tempC = NAN, hum = NAN;
+                if (read_aht20(tempC, hum)) {
+                    TemperatureRead = (tempFormat == "F" || tempFormat == "f") ? (tempC * 9.0 / 5.0 + 32.0) : tempC;
+                    HumidityRead = hum;
+                } else {
+                    TemperatureRead = NAN;
+                    HumidityRead = NAN;
+                }
             }
-            dht22Hum = dht.readHumidity();
-            lastDHT22Read = currentMillis;
+            lastTemperatureRead = currentMillis;
 
 #ifndef ESP8266
-            if (!isnan(dht22Temp) && !isnan(dht22Hum)) {
+            if (!isnan(TemperatureRead) && !isnan(HumidityRead)) {
                 // HomeKit always expects temperature in Celsius
-                float tempCelsius = dht22Temp;
+                float tempCelsius = TemperatureRead;
                 if (tempFormat == "F" || tempFormat == "f") {
-                    tempCelsius = (dht22Temp - 32.0) * 5.0 / 9.0;
+                    tempCelsius = (TemperatureRead - 32.0) * 5.0 / 9.0;
                 }
-                notify_homekit_temperature_humidity(tempCelsius, dht22Hum);
+                notify_homekit_temperature_humidity(tempCelsius, HumidityRead);
             }
 #endif
         }
 
-        if (!isnan(dht22Temp)) {
-            JSON_ADD_FLOAT("dht22Temp", dht22Temp);
+        if (!isnan(TemperatureRead)) {
+            JSON_ADD_FLOAT("TemperatureRead", TemperatureRead);
         }
-        if (!isnan(dht22Hum)) {
-            JSON_ADD_FLOAT("dht22Hum", dht22Hum);
+        if (!isnan(HumidityRead)) {
+            JSON_ADD_FLOAT("HumidityRead", HumidityRead);
         }
     }
 #endif // USE_DHT22
@@ -768,6 +781,8 @@ void build_status_json(char *json)
     JSON_ADD_STR("firmwareVersion", std::string(AUTO_VERSION).c_str());
 #ifdef GRGDO1_V1
     JSON_ADD_STR("hardwareRevision", "rev1");
+#elif defined(GRGDO1_V3)
+    JSON_ADD_STR("hardwareRevision", "rev3");
 #else
     JSON_ADD_STR("hardwareRevision", "rev2");
 #endif
@@ -863,9 +878,6 @@ void build_status_json(char *json)
     JSON_ADD_INT(cfg_occupancyDuration, userConfig->getOccupancyDuration());
     JSON_ADD_BOOL(cfg_enableIPv6, userConfig->getEnableIPv6());
     JSON_ADD_STR("ipv6Addresses", ipv6_addresses);
-#ifdef USE_GDOLIB
-    JSON_ADD_BOOL(cfg_useSWserial, userConfig->getUseSWserial());
-#endif
 #ifdef RATGDO32_DISCO
     JSON_ADD_BOOL("distanceSensor", garage_door.has_distance_sensor);
     if (garage_door.has_distance_sensor)
@@ -890,7 +902,10 @@ void build_status_json(char *json)
 #endif
 #ifdef USE_DHT22
     JSON_ADD_INT(cfg_dht22Pin, (int32_t)userConfig->getDHT22Pin());
-    JSON_ADD_STR(cfg_dht22TempFormat, userConfig->getDHT22TempFormat());
+    JSON_ADD_STR(cfg_TemperatureReadFormat, userConfig->getTemperatureReadFormat());
+#endif
+#ifdef USE_AHT20
+    JSON_ADD_BOOL("aht20Detected", aht20_detected);
 #endif
     JSON_ADD_INT("webRequests", request_count);
     JSON_ADD_INT("webMaxResponseTime", max_response_time);

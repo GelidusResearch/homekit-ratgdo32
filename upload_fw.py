@@ -11,7 +11,7 @@ Import("env")
 def post_program_action(source, target, env):
     print(".bin file built, coping to dropbox")
     binPath = target[0].get_abspath()
-    env.Execute(f"copy {binPath} \"C:\\Users\\mitchjs\\Dropbox\Public\\\"")
+    env.Execute(f"copy {binPath} \"x:\\github\\gelidusresearch\\homekit-ratgdo32\\\"")
 #
 #env.AddPostAction("$BUILD_DIR/firmware.bin", post_program_action)
 
@@ -70,7 +70,7 @@ def on_upload(source, target, env):
         else:
             print("Upload FAILED!")
             exit(1)
-    
+
     except FileNotFoundError:
         print(f"Error: File not found at '{binPath}' during open attempt.")
         exit(1)

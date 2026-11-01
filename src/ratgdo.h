@@ -111,7 +111,7 @@ const gpio_num_t INPUT_OBST_PIN = (gpio_num_t)INPUT_OBST_GPIO;
 #ifndef LED_BUILTIN_ON_STATE
 #define LED_BUILTIN_ON_STATE HIGH
 #endif
-const gpio_num_t LED_BUILTIN = (gpio_num_t)LED_BUILTIN_GPIO;
+const gpio_num_t LED_BUILTIN_PIN = (gpio_num_t)LED_BUILTIN_GPIO;
 #ifndef DRY_CONTACT_OPEN_GPIO
 #define DRY_CONTACT_OPEN_GPIO GPIO_NUM_13
 #endif
@@ -140,8 +140,13 @@ const gpio_num_t DISCRETE_CLOSE_PIN = GPIO_NUM_25; // alternative (or in additio
 #endif
 
 #ifdef RATGDO32_DISCO
+#ifdef GRGDO1_V3
+const gpio_num_t BEEPER_PIN = GPIO_NUM_30;
+const gpio_num_t LASER_PIN = GPIO_NUM_29;
+#else
 const gpio_num_t BEEPER_PIN = GPIO_NUM_33;
 const gpio_num_t LASER_PIN = GPIO_NUM_23;
+#endif
 #ifndef SENSOR_SDA_GPIO
 #define SENSOR_SDA_GPIO GPIO_NUM_19
 #endif
@@ -150,8 +155,28 @@ const gpio_num_t SENSOR_SDA_PIN = (gpio_num_t)SENSOR_SDA_GPIO;
 #define SENSOR_SCL_GPIO GPIO_NUM_18
 #endif
 const gpio_num_t SENSOR_SCL_PIN = (gpio_num_t)SENSOR_SCL_GPIO;
+#ifdef GRGDO1_V3
+const gpio_num_t SENSOR_SHUTDOWN_PIN = GPIO_NUM_NC;
+#else
 const gpio_num_t SENSOR_SHUTDOWN_PIN = GPIO_NUM_32;
 #endif
+#endif
+
+#ifdef USE_AHT20
+// Each board defines exactly one fixed SDA/SCL pin pair for the AHT20, set via
+// platformio.ini (the I2C port it uses, e.g. AUX1 on GRGDO1 V2 or AUX2 on V3,
+// is a board-specific hardware detail, not a runtime choice). Boards without
+// AHT20 support leave these as GPIO_NUM_NC ("not connected"), which
+// setup_aht20() treats as unavailable.
+#ifndef AHT20_SDA_GPIO
+#define AHT20_SDA_GPIO GPIO_NUM_NC
+#endif
+const gpio_num_t AHT20_SDA_PIN = (gpio_num_t)AHT20_SDA_GPIO;
+#ifndef AHT20_SCL_GPIO
+#define AHT20_SCL_GPIO GPIO_NUM_NC
+#endif
+const gpio_num_t AHT20_SCL_PIN = (gpio_num_t)AHT20_SCL_GPIO;
+#endif // USE_AHT20
 
 enum GarageDoorCurrentState : uint8_t
 {

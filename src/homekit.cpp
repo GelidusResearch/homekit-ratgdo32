@@ -28,6 +28,7 @@
 #include "softAP.h"
 #include "led.h"
 #include "provision.h"
+#include "aht20.h"
 
 #ifdef RATGDO32_DISCO
 #include "vehicle.h"
@@ -915,13 +916,13 @@ void setup_homekit()
 
 #ifdef USE_DHT22
     int dht22Pin = userConfig->contains(cfg_dht22Pin) ? std::get<int>(userConfig->get(cfg_dht22Pin)) : -1;
-    if (dht22Pin >= 0) {
-        ESP_LOGI(TAG, "Creating Temperature and Humidity Sensor accessory (DHT22 on pin %d)", dht22Pin);
+    if (dht22Pin >= 0 || aht20_detected) {
+        ESP_LOGI(TAG, "Creating Temperature and Humidity Sensor accessory (dht22Pin=%d, aht20_detected=%d)", dht22Pin, aht20_detected);
         new SpanAccessory(HOMEKIT_AID_TEMP_HUMIDITY);
         new DEV_Info("Temperature Sensor");
         tempHumidity = new DEV_TempHumidity();
     } else {
-        ESP_LOGI(TAG, "DHT22 disabled. Skipping temperature/humidity service");
+        ESP_LOGI(TAG, "No temperature/humidity sensor configured or detected. Skipping service");
     }
 #endif
 

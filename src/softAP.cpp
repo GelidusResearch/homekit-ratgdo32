@@ -211,13 +211,32 @@ void soft_ap_loop()
     }
 }
 
-void doRedirect(const char *location = "/captive")
+void doRedirect(const char *location = "/")
 {
-    // Redirect to root
-    ESP_LOGD(TAG, "Send redirect to %s", location);
-    server.sendHeader(F("Location"), location, true);
-    server.send_P(302, type_txt, "");
+    // Build an absolute URL (e.g., http://192.168.4.1)
+    String absoluteLocation = "http://" + WiFi.softAPIP().toString();
+
+    // Ensure formatting remains clean if location parameter already has a leading slash
+    if (location[0] != '/') {
+        absoluteLocation += "/";
+    }
+    absoluteLocation += location;
+
+    ESP_LOGD(TAG, "Send redirect to %s", absoluteLocation.c_str());
+
+    // Add anti-caching headers so iOS doesn't cache a broken routing state
+    server.sendHeader("Location", absoluteLocation, true);
+    server.sendHeader("Cache-Control", "no-cache, no-store, must-revalidate");
+    server.sendHeader("Pragma", "no-cache");
+    server.sendHeader("Expires", "0");
+
+    // Send 302 redirect. iOS prefers a small HTML string body over an entirely empty payload.
+    String htmlBody = "<html><head><meta http-equiv='refresh' content='0;url=" + absoluteLocation + "'></head>"
+                      "<body>Redirecting...</body></html>";
+
+    server.send(302, "text/html", htmlBody);
 }
+
 
 void handle_softAPweb()
 {
