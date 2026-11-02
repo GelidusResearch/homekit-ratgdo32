@@ -54,7 +54,7 @@ static constexpr int32_t VEHICLE_AVERAGE_OVER = 50;            // vehicle distan
 static std::bitset<256> distanceInRange;                       // the length of this bitset determines how many out of range readings are required for presence detection to change states
 void calculatePresence(int32_t distance);
 
-void setup_vehicle()
+static void probe_vehicle()
 {
     uint8_t status = 0;
 
@@ -161,6 +161,20 @@ void setup_vehicle()
     vehicleThresholdDistance = userConfig->getVehicleThreshold() * 10; // convert centimeters to millimeters
     enable_service_homekit_vehicle(userConfig->getVehicleHomeKit());
     vehicle_setup_done = true;
+}
+
+void setup_vehicle()
+{
+    probe_vehicle();
+
+    // The sensor presence is remembered in NVRAM, so forget it if the sensor
+    // was removed or failed to initialize, otherwise the UI and HomeKit keep it.
+    if (!vehicle_setup_done && read_door_int(nvram_has_distance))
+    {
+        ESP_LOGI(TAG, "VL53L1X not present, clearing saved distance sensor flag");
+        nvRam->write(nvram_has_distance, (int32_t)0);
+        garage_door.has_distance_sensor = false;
+    }
 }
 
 void vehicle_loop()

@@ -159,7 +159,7 @@ void setup()
 #else
     esp_core_dump_init();
 #ifdef RATGDO32_DISCO
-    tone(BEEPER_PIN, 1300, 500);
+    BEEP(1300, 500);
 #endif
 #endif // ESP32
     // led on during setup
@@ -350,7 +350,7 @@ void loop()
         static bool startupBeeped = false;
         if (!startupBeeped)
         {
-            tone(BEEPER_PIN, 2000, 500);
+            BEEP(2000, 500);
             startupBeeped = true;
         }
 #endif

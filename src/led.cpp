@@ -31,24 +31,28 @@ LED::LED(uint8_t gpio_num, uint8_t state)
     currentState = offState = (onState == 1) ? 0 : 1;
     idleState = (activeState == 1) ? 0 : 1;
     LEDtimer = Ticker();
-    pinMode(pin, OUTPUT);
+    if (pin != (uint8_t)GPIO_NUM_NC)
+        pinMode(pin, OUTPUT);
 }
 
 void LED::on()
 {
-    digitalWrite(pin, onState);
+    if (pin != (uint8_t)GPIO_NUM_NC)
+        digitalWrite(pin, onState);
     currentState = onState;
 }
 
 void LED::off()
 {
-    digitalWrite(pin, offState);
+    if (pin != (uint8_t)GPIO_NUM_NC)
+        digitalWrite(pin, offState);
     currentState = offState;
 }
 
 void LED::idle()
 {
-    digitalWrite(pin, idleState);
+    if (pin != (uint8_t)GPIO_NUM_NC)
+        digitalWrite(pin, idleState);
     currentState = idleState;
 }
 
@@ -75,7 +79,8 @@ void LED::flash(uint64_t ms)
     // Don't flash if we are already in a flash.
     if (!LEDtimer.active())
     {
-        digitalWrite(pin, activeState);
+        if (pin != (uint8_t)GPIO_NUM_NC)
+            digitalWrite(pin, activeState);
         currentState = activeState;
         LEDtimer.once_ms(ms, [this]()
                          { this->idle(); });

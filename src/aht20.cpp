@@ -23,6 +23,7 @@ bool aht20_detected = false;
 // RATGDO project includes
 #include "ratgdo.h"
 #include "config.h"
+#include "vehicle.h"
 
 // Logger tag
 static const char *TAG = "ratgdo-aht20";
@@ -31,18 +32,31 @@ static const uint8_t AHT20_I2C_ADDRESS = 0x38;
 
 static Adafruit_AHTX0 aht;
 
+// The VL53L1X and AHT20 share the single Wire controller on different pins,
+// so the bus is switched to the AHT20 pins for each access and back again.
+static bool select_aht20_bus()
+{
+    Wire.end();
+    return Wire.begin(AHT20_SDA_PIN, AHT20_SCL_PIN);
+}
+
+static void restore_sensor_bus()
+{
+    Wire.end();
+    if (vehicle_setup_done)
+        Wire.begin(SENSOR_SDA_PIN, SENSOR_SCL_PIN);
+}
+
 void setup_aht20()
 {
     ESP_LOGI(TAG, "=== Probing for AHT20 temperature/humidity sensor ===");
 
-    if (Wire.begin(AHT20_SDA_PIN, AHT20_SCL_PIN))
-    {
-        ESP_LOGI(TAG, "I2C pins configured for AHT20 sensor");
-    }
-
     delay(250);
 
-    if (!aht.begin(&Wire))
+    bool found = select_aht20_bus() && aht.begin(&Wire);
+    restore_sensor_bus();
+
+    if (!found)
     {
         ESP_LOGE(TAG, "AHT20 I2C initialization failed");
         return;
@@ -57,8 +71,15 @@ bool read_aht20(float &tempC, float &humidity)
     if (!aht20_detected)
         return false;
 
+    if (!select_aht20_bus())
+    {
+        restore_sensor_bus();
+        return false;
+    }
     sensors_event_t humidityEvent, tempEvent;
-    if (!aht.getEvent(&humidityEvent, &tempEvent))
+    bool ok = aht.getEvent(&humidityEvent, &tempEvent);
+    restore_sensor_bus();
+    if (!ok)
         return false;
 
     tempC = tempEvent.temperature;

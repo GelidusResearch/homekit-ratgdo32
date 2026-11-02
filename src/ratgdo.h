@@ -141,12 +141,25 @@ const gpio_num_t DISCRETE_CLOSE_PIN = GPIO_NUM_25; // alternative (or in additio
 
 #ifdef RATGDO32_DISCO
 #ifdef GRGDO1_V3
-const gpio_num_t BEEPER_PIN = GPIO_NUM_30;
-const gpio_num_t LASER_PIN = GPIO_NUM_29;
+// GPIO 24-30 are SPI flash pins on the ESP32-C6, and rev3 has no beeper or laser.
+const gpio_num_t BEEPER_PIN = GPIO_NUM_NC;
 #else
 const gpio_num_t BEEPER_PIN = GPIO_NUM_33;
+#endif
+#if defined(GRGDO1_V1) || defined(GRGDO1_V2) || defined(GRGDO1_V3)
+// No GRGDO1 board has a parking assist laser
+const gpio_num_t LASER_PIN = GPIO_NUM_NC;
+#else
 const gpio_num_t LASER_PIN = GPIO_NUM_23;
 #endif
+constexpr bool HAS_LASER = (LASER_PIN != GPIO_NUM_NC);
+// Beep only if a beeper is fitted (tone() on an invalid pin is not safe)
+#define BEEP(...)                    \
+    do                               \
+    {                                \
+        if (BEEPER_PIN != GPIO_NUM_NC) \
+            tone(BEEPER_PIN, __VA_ARGS__); \
+    } while (0)
 #ifndef SENSOR_SDA_GPIO
 #define SENSOR_SDA_GPIO GPIO_NUM_19
 #endif
@@ -155,11 +168,14 @@ const gpio_num_t SENSOR_SDA_PIN = (gpio_num_t)SENSOR_SDA_GPIO;
 #define SENSOR_SCL_GPIO GPIO_NUM_18
 #endif
 const gpio_num_t SENSOR_SCL_PIN = (gpio_num_t)SENSOR_SCL_GPIO;
+#ifndef SENSOR_SHUTDOWN_GPIO
 #ifdef GRGDO1_V3
-const gpio_num_t SENSOR_SHUTDOWN_PIN = GPIO_NUM_NC;
+#define SENSOR_SHUTDOWN_GPIO GPIO_NUM_3
 #else
-const gpio_num_t SENSOR_SHUTDOWN_PIN = GPIO_NUM_32;
+#define SENSOR_SHUTDOWN_GPIO GPIO_NUM_32
 #endif
+#endif
+const gpio_num_t SENSOR_SHUTDOWN_PIN = (gpio_num_t)SENSOR_SHUTDOWN_GPIO;
 #endif
 
 #ifdef USE_AHT20

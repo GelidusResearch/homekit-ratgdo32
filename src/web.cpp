@@ -880,21 +880,28 @@ void build_status_json(char *json)
     JSON_ADD_STR("ipv6Addresses", ipv6_addresses);
 #ifdef RATGDO32_DISCO
     JSON_ADD_BOOL("distanceSensor", garage_door.has_distance_sensor);
+    JSON_ADD_BOOL("hasLaser", HAS_LASER);
     if (garage_door.has_distance_sensor)
     {
         JSON_ADD_STR("vehicleStatus", vehicleStatus);
         JSON_ADD_INT("vehicleDist", (uint32_t)vehicleDistance);
-        last_reported_assist_laser = laser.state();
-        JSON_ADD_BOOL("assistLaser", last_reported_assist_laser);
+        if (HAS_LASER)
+        {
+            last_reported_assist_laser = laser.state();
+            JSON_ADD_BOOL("assistLaser", last_reported_assist_laser);
+        }
     }
     JSON_ADD_BOOL(cfg_vehicleHomeKit, userConfig->getVehicleHomeKit());
     JSON_ADD_BOOL(cfg_vehicleOccupancyHomeKit, userConfig->getVehicleOccupancyHomeKit());
     JSON_ADD_BOOL(cfg_vehicleArrivingHomeKit, userConfig->getVehicleArrivingHomeKit());
     JSON_ADD_BOOL(cfg_vehicleDepartingHomeKit, userConfig->getVehicleDepartingHomeKit());
     JSON_ADD_INT(cfg_vehicleThreshold, userConfig->getVehicleThreshold());
-    JSON_ADD_BOOL(cfg_laserEnabled, userConfig->getLaserEnabled());
-    JSON_ADD_BOOL(cfg_laserHomeKit, userConfig->getLaserHomeKit());
-    JSON_ADD_INT(cfg_assistDuration, userConfig->getAssistDuration());
+    if (HAS_LASER)
+    {
+        JSON_ADD_BOOL(cfg_laserEnabled, userConfig->getLaserEnabled());
+        JSON_ADD_BOOL(cfg_laserHomeKit, userConfig->getLaserHomeKit());
+        JSON_ADD_INT(cfg_assistDuration, userConfig->getAssistDuration());
+    }
 #endif
     JSON_ADD_BOOL(cfg_homespanCLI, userConfig->getEnableHomeSpanCLI());
     JSON_ADD_BOOL(cfg_lightHomeKit, userConfig->getLightHomeKit());

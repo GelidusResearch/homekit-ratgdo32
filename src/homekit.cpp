@@ -665,7 +665,7 @@ void enable_service_homekit_vehicle(bool enable)
 
 bool enable_service_homekit_laser(bool enable)
 {
-    if (enable)
+    if (enable && HAS_LASER)
     {
         if (!assistLaser && userConfig->getLaserEnabled() && userConfig->getLaserHomeKit())
         {
@@ -965,13 +965,13 @@ boolean DEV_Info::update()
     led.flash(2000);
 #ifdef RATGDO32_DISCO
     laser.flash(2000);
-    tone(BEEPER_PIN, 1300);
+    BEEP(1300);
     delay(500);
-    tone(BEEPER_PIN, 2000);
+    BEEP(2000);
     delay(500);
-    tone(BEEPER_PIN, 1300);
+    BEEP(1300);
     delay(500);
-    tone(BEEPER_PIN, 2000, 500);
+    BEEP(2000, 500);
 #endif
     return true;
 }

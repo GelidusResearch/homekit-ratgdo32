@@ -475,6 +475,14 @@ function setElementsFromStatus(status) {
                 setVehicleConfigVisibility(value);
                 document.getElementById("laserSetting").style.display = (value) ? "table-row" : "none";
                 break;
+            case "hasLaser":
+                // must follow distanceSensor in the status JSON; hides laser controls on boards without one
+                if (!value) {
+                    document.getElementById("laserSetting").style.display = "none";
+                    document.getElementById("laserButton").style.display = "none";
+                    document.getElementById("parkAssist").style.display = "none";
+                }
+                break;
             case "vehicleThreshold":
                 document.getElementById(key).value = value;
                 document.getElementById("vehicleThresholdCM").innerHTML = value;

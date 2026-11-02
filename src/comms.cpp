@@ -2686,7 +2686,7 @@ void TTCtimerFn(void (*callback)(), bool light)
             }
         }
 #ifdef RATGDO32_DISCO
-        tone(BEEPER_PIN, 1300, 125);
+        BEEP(1300, 125);
 #endif
         TTCiterations--;
     }
