@@ -272,7 +272,12 @@ bool helperBuiltInTTC(const std::string &key, const char *value, configSetting *
         if (!userConfig->getBuiltInTTC())
         {
             ESP_LOGI(TAG, "Disable built-in TTC");
-            gdo_cancel_ttc();
+            esp_err_t err = gdo_cancel_ttc();
+            if (err != ESP_OK)
+                ESP_LOGE(TAG, "Failed to send TTC cancel: %s", esp_err_to_name(err));
+            // Also zero the stored duration so other clients (e.g. wall unit) see TTC as off
+            gdo_set_time_to_close(0);
+            gdo_get_ttc_state(); // read back so UI reflects what the opener actually did
         }
         else
         {
