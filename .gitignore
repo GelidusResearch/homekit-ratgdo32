@@ -1,5 +1,5 @@
-# PlatformIO
 .pio
+.pio-core
 .pioenvs
 .piolibdeps
 lib_deps

@@ -291,13 +291,30 @@ function capitalizeFirstLetter(val) {
     return String(val).charAt(0).toUpperCase() + String(val).slice(1);
 }
 
+// Update the label beside the built-in close delay slider (minutes, 0 = off)
+function updateBuiltInLabel(mins) {
+    const on = mins > 0;
+    document.getElementById("builtInTTCValue").innerText = on ? mins : "Off";
+    document.getElementById("builtInUnits").style.display = on ? "inline" : "none";
+    document.getElementById("builtInWarning").style.display = on ? "inline" : "none";
+}
+
+// Show only the controls that apply to the selected close method
+function applyTTCMode() {
+    const available = document.getElementById("builtInTTCrow").style.display != "none";
+    const builtIn = available && document.getElementById("ttcModeBuiltIn").checked;
+    document.getElementById("localTTCrow").style.display = builtIn ? "none" : "";
+    document.getElementById("localTTClightRow").style.display = builtIn ? "none" : "";
+    document.getElementById("builtInSliderRow").style.display = builtIn ? "" : "none";
+    if (builtIn) updateBuiltInLabel(document.getElementById("builtInTTC").value);
+}
+
 // Show or hide the warning about GDO's built-in automatic close timer
 function showTTCwarning(TTCvalue, TTCremaining, TTChold) {
-    if (TTCvalue == 0) {
+    // built-in automatic close only exists on Sec+ 2.0, otherwise the software Door Close Delay is used
+    if (TTCvalue == 0 || serverStatus.GDOSecurityType != 2) {
         // built-in automatic close is off, hide the warning
-        document.getElementById("builtInTTCValue").innerText = "Off";
-        document.getElementById("builtInUnits").style.display = "none";
-        document.getElementById("builtInWarning").style.display = "none";
+        updateBuiltInLabel(0);
         document.getElementById("autoCloseWarning").style.display = "none";
     }
     else {
@@ -391,6 +408,8 @@ function setElementsFromStatus(status) {
                 document.getElementById("gdosec2").checked = (value == 2);
                 document.getElementById("gdodrycontact").checked = (value == 3);
                 document.getElementById("builtInTTCrow").style.display = (value == 2) ? "table-row" : "none";
+                if (value != 2) showTTCwarning(0, 0, false);
+                applyTTCMode();
                 document.getElementById("lockButton").style.display = (value != 3) ? "inline-block" : "none";
                 document.getElementById("doorButton").style.margin = (value != 3) ? "" : "auto"; // auto will center the button
                 document.getElementById("lightButton").style.display = (value != 3) ? "inline-block" : "none";
@@ -444,7 +463,10 @@ function setElementsFromStatus(status) {
                 document.getElementById("TTCwarning").style.display = (value < 5) ? "inline" : "none";
                 break;
             case "builtInTTC":
-                document.getElementById(key).value = (value <= 600) ? value / 60 : (value <= 3600) ? (value - 600) / 300 + 10 : 20;
+                document.getElementById(key).value = Math.min(Math.round(value / 60), 10);
+                document.getElementById("ttcModeBuiltIn").checked = (value > 0);
+                document.getElementById("ttcModeLocal").checked = (value == 0);
+                applyTTCMode();
                 // We have to use global serverStatus rather than local status as local one only contains
                 // values to be updated... which may not include the other built-in TTC values
                 showTTCwarning(value, serverStatus.builtInTTCremaining, serverStatus.builtInTTChold);
@@ -1352,16 +1374,21 @@ function handleVehicleHomeKitToggle(checked) {
 }
 
 async function saveSettings() {
+    const builtInMode = document.getElementById("builtInTTCrow").style.display != "none" &&
+        document.getElementById("ttcModeBuiltIn").checked;
     let TTCseconds = Math.max(parseInt(document.getElementById("TTCseconds").value), 0);
-    if (isNaN(TTCseconds)) TTCseconds = 0;
+    if (isNaN(TTCseconds) || builtInMode) TTCseconds = 0;
     TTCseconds = (TTCseconds <= 10) ? TTCseconds : (TTCseconds <= 20) ? ((TTCseconds - 10) * 5) + 10 : 300;
-    let msg = (TTCseconds < 5) ? "WARNING: You have requested a time-to-close delay of less than 5 seconds.\n\n" +
+    let msg = (!builtInMode && TTCseconds < 5) ? "WARNING: You have requested a time-to-close delay of less than 5 seconds.\n\n" +
         "This violates US Consumer Product Safety Act Regulations, section 1211.14, unattended operation requirements. " +
         "By selecting a " + TTCseconds + " seconds delay you accept all responsibility and liability for injury or any other loss.\n\n" : "";
     let TTClight = '1';
     if (!document.getElementById("TTClight").checked) {
         TTClight = '0';
-        if (msg == "") {
+        if (builtInMode) {
+            // light flashing is done by the door opener, local setting does not apply
+        }
+        else if (msg == "") {
             msg = "WARNING: You have disabled light flashing during time-to-close.\n\n" +
                 "This violates US Consumer Product Safety Act Regulations, section 1211.14, unattended operation requirements. " +
                 "By disabling light flashing you accept all responsibility and liability for injury or any other loss.\n\n";
@@ -1370,10 +1397,9 @@ async function saveSettings() {
             msg = "WARNING: You have disabled light flashing during time-to-close.\n\n" + msg;
         }
     }
-    let builtInTTC = Math.max(parseInt(document.getElementById("builtInTTC").value), 0);
+    let builtInTTC = builtInMode ? Math.min(Math.max(parseInt(document.getElementById("builtInTTC").value), 0), 10) : 0;
     if (isNaN(builtInTTC)) builtInTTC = 0;
-    builtInTTC = (builtInTTC <= 10) ? builtInTTC * 60 :
-        (builtInTTC <= 20) ? ((builtInTTC - 10) * 300) + 600 : 3600;
+    builtInTTC = builtInTTC * 60;
 
     if (!confirm(msg + 'Save Settings. Reboot may be required, are you sure?')) {
         return;

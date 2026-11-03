@@ -498,6 +498,31 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
         break;
     case GDO_CB_EVENT_SET_TTC:
         ESP_LOGI(TAG, "GDO event: TTC Set : %d", status->ttc_seconds);
+        if (status->ttc_seconds >= 60)
+        {
+            // Keep local config in sync with the GDO's built-in time-to-close
+            if (userConfig->getBuiltInTTC() != status->ttc_seconds)
+            {
+                ESP_LOGI(TAG, "Update built-in automatic time-to-close to %d seconds", status->ttc_seconds);
+                userConfig->set(cfg_builtInTTC, (int)status->ttc_seconds);
+            }
+            garage_door.builtInTTC = status->ttc_seconds;
+        }
+        break;
+    case GDO_CB_EVENT_TTC:
+        ESP_LOGI(TAG, "GDO event: TTC state: %d, seconds: %d", status->ttc_state, status->ttc_seconds);
+        if (status->ttc_state == GDO_TTC_STATE_OFF)
+        {
+            garage_door.builtInTTC = 0;
+            if (userConfig->getBuiltInTTC() != 0)
+                userConfig->set(cfg_builtInTTC, 0);
+        }
+        else if (status->ttc_seconds >= 60)
+        {
+            garage_door.builtInTTC = status->ttc_seconds;
+            if (userConfig->getBuiltInTTC() != status->ttc_seconds)
+                userConfig->set(cfg_builtInTTC, (int)status->ttc_seconds);
+        }
         break;
     case GDO_CB_EVENT_UPDATE_TTC:
         ESP_LOGI(TAG, "GDO event: TTC Countdown Update: %d", status->ttc_countdown);
@@ -509,7 +534,13 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
         ESP_LOGI(TAG, "GDO event: TTC Release");
         break;
     case GDO_CB_EVENT_CANCEL_TTC:
-        if (status->ttc_state == GDO_TTC_STATE_OFF) ESP_LOGI(TAG, "GDO event: TTC Off");
+        if (status->ttc_state == GDO_TTC_STATE_OFF)
+        {
+            ESP_LOGI(TAG, "GDO event: TTC Off");
+            garage_door.builtInTTC = 0;
+            if (userConfig->getBuiltInTTC() != 0)
+                userConfig->set(cfg_builtInTTC, 0);
+        }
         break;
     case GDO_CB_EVENT_FIRMWARE:
         ESP_LOGI(TAG, "GDO event: GDO Firmware Ver. %d.%d", status->fw_major, status->fw_minor);
@@ -2819,14 +2850,7 @@ GarageDoorCurrentState close_door(bool bypass_ttc)
         {
             ESP_LOGI(TAG, "Delay door close by %d seconds", userConfig->getTTCseconds());
 #ifdef USE_GDOLIB
-            if (doorControlType == 2 && userConfig->getBuiltInTTC())
-            {
-                gdo_set_time_to_close(userConfig->getTTCseconds());
-            }
-            else
-            {
-                delayFnCall(userConfig->getTTCseconds() * 1000, door_command_close);
-            }
+            delayFnCall(userConfig->getTTCseconds() * 1000, door_command_close);
 #else
             delayFnCall(userConfig->getTTCseconds() * 1000, door_command_close);
 #endif // USE_GDOLIB

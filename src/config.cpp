@@ -266,11 +266,19 @@ bool helperBuiltInTTC(const std::string &key, const char *value, configSetting *
     userConfig->set(key, value);
     garage_door.builtInTTC = userConfig->getBuiltInTTC();
 #ifdef USE_GDOLIB
-    if (!userConfig->getBuiltInTTC())
+    // Built-in TTC lives in the opener and only exists on Sec+ 2.0
+    if (doorControlType == 2)
     {
-        // We have just disabled use of GDO's built-in time-to-close.
-        ESP_LOGI(TAG, "Disable built-in TTC, set to: %d", userConfig->getTTCseconds() < 60 ? 0 : userConfig->getTTCseconds());
-        gdo_set_time_to_close(userConfig->getTTCseconds() < 60 ? 0 : userConfig->getTTCseconds());
+        if (!userConfig->getBuiltInTTC())
+        {
+            ESP_LOGI(TAG, "Disable built-in TTC");
+            gdo_cancel_ttc();
+        }
+        else
+        {
+            ESP_LOGI(TAG, "Set built-in TTC to %d seconds", (int)userConfig->getBuiltInTTC());
+            gdo_set_time_to_close((uint16_t)userConfig->getBuiltInTTC());
+        }
     }
 #else
     if (garage_door.builtInTTC == 0)
