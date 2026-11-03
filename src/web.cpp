@@ -309,6 +309,13 @@ void unregisterRequest()
     }
 }
 
+#if defined(USE_DHT22) || defined(USE_AHT20)
+// Latest sensor readings, shared by web_loop (updates) and the full status JSON (new clients)
+static float TemperatureRead = NAN;
+static float HumidityRead = NAN;
+static unsigned long lastTemperatureRead = 0;
+#endif
+
 void web_loop()
 {
     if (!web_setup_done)
@@ -336,39 +343,22 @@ void web_loop()
     TAKE_MUTEX();
     JSON_START(json);
 #if defined(USE_DHT22) || defined(USE_AHT20)
-    // DHT22 sensor read and config
     int dht22Pin = userConfig->contains(cfg_dht22Pin) ? std::get<int>(userConfig->get(cfg_dht22Pin)) : -1;
-    std::string tempFormat = userConfig->contains(cfg_TemperatureReadFormat) ? std::get<configStr>(userConfig->get(cfg_TemperatureReadFormat)).str : "C";
-    static float TemperatureRead = NAN;
-    static float HumidityRead = NAN;
-    static unsigned long lastTemperatureRead = 0;
-    static std::string lastTempFormat = "";
-    const unsigned long TEMPERATURE_READ_INTERVAL = 60000; // 60 seconds
-
-    // Reset cache if temperature format changes
-    if (tempFormat != lastTempFormat) {
-        lastTemperatureRead = 0;
-        lastTempFormat = tempFormat;
-    }
+    const unsigned long TEMPERATURE_READ_INTERVAL = 15000; // 15 seconds
 
     if (dht22Pin >= 0 || aht20_detected) {
         unsigned long currentMillis = millis();
-        // Read sensor initially (lastTemperatureRead == 0) or after 60 seconds
         if (lastTemperatureRead == 0 || (currentMillis - lastTemperatureRead >= TEMPERATURE_READ_INTERVAL)) {
             if (dht22Pin >= 0) {
                 static DHT dht(dht22Pin, DHT22);
                 dht.begin();
-                if (tempFormat == "F" || tempFormat == "f") {
-                    TemperatureRead = dht.readTemperature(true);
-                } else {
-                    TemperatureRead = dht.readTemperature();
-                }
+                TemperatureRead = dht.readTemperature();
                 HumidityRead = dht.readHumidity();
             } else {
                 // No DHT22 pin configured; use the auto-detected AHT20 (I2C) instead.
                 float tempC = NAN, hum = NAN;
                 if (read_aht20(tempC, hum)) {
-                    TemperatureRead = (tempFormat == "F" || tempFormat == "f") ? (tempC * 9.0 / 5.0 + 32.0) : tempC;
+                    TemperatureRead = tempC;
                     HumidityRead = hum;
                 } else {
                     TemperatureRead = NAN;
@@ -379,21 +369,16 @@ void web_loop()
 
 #ifndef ESP8266
             if (!isnan(TemperatureRead) && !isnan(HumidityRead)) {
-                // HomeKit always expects temperature in Celsius
-                float tempCelsius = TemperatureRead;
-                if (tempFormat == "F" || tempFormat == "f") {
-                    tempCelsius = (TemperatureRead - 32.0) * 5.0 / 9.0;
-                }
-                notify_homekit_temperature_humidity(tempCelsius, HumidityRead);
+                notify_homekit_temperature_humidity(TemperatureRead, HumidityRead);
             }
 #endif
-        }
-
-        if (!isnan(TemperatureRead)) {
-            JSON_ADD_FLOAT("TemperatureRead", TemperatureRead);
-        }
-        if (!isnan(HumidityRead)) {
-            JSON_ADD_FLOAT("HumidityRead", HumidityRead);
+            // Only report when there is a new reading; adding these every loop forced an SSE broadcast each pass.
+            if (!isnan(TemperatureRead)) {
+                JSON_ADD_FLOAT("TemperatureRead", TemperatureRead);
+            }
+            if (!isnan(HumidityRead)) {
+                JSON_ADD_FLOAT("HumidityRead", HumidityRead);
+            }
         }
     }
 #endif // USE_DHT22
@@ -909,10 +894,16 @@ void build_status_json(char *json)
 #endif
 #ifdef USE_DHT22
     JSON_ADD_INT(cfg_dht22Pin, (int32_t)userConfig->getDHT22Pin());
-    JSON_ADD_STR(cfg_TemperatureReadFormat, userConfig->getTemperatureReadFormat());
 #endif
 #ifdef USE_AHT20
     JSON_ADD_BOOL("aht20Detected", aht20_detected);
+#endif
+#if defined(USE_DHT22) || defined(USE_AHT20)
+    // Cached readings so a newly connected browser does not wait for the next sensor read
+    if (!isnan(TemperatureRead))
+        JSON_ADD_FLOAT("TemperatureRead", TemperatureRead);
+    if (!isnan(HumidityRead))
+        JSON_ADD_FLOAT("HumidityRead", HumidityRead);
 #endif
     JSON_ADD_INT("webRequests", request_count);
     JSON_ADD_INT("webMaxResponseTime", max_response_time);

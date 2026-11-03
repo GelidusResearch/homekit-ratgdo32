@@ -501,18 +501,19 @@
                   <span style="font-size: 0.8em;">GPIO pin (-1 to disable)</span>
                 </td>
               </tr>
-              <tr id="TemperatureReadFormatRow" style="display:none;">
-                <td></td>
-                <td>&nbsp;
-                  <input type="radio" id="tempFormatC" name="tempFormat" value="C" checked>
-                  <label for="tempFormatC">Celsius</label>
-                  <input type="radio" id="tempFormatF" name="tempFormat" value="F">
-                  <label for="tempFormatF">Fahrenheit</label>
-                </td>
-              </tr>
               <tr id="aht20Row" style="display:none;">
                 <td class="label">AHT20 Sensor:</td>
                 <td>&nbsp;<span id="aht20Status"></span></td>
+              </tr>
+              <tr>
+                <td class="label">Temperature&nbsp;Unit:</td>
+                <td>&nbsp;
+                  <input type="radio" id="tempFormatC" name="tempFormat" value="C" onchange="setTempUnit('C')">
+                  <label for="tempFormatC">Celsius</label>
+                  <input type="radio" id="tempFormatF" name="tempFormat" value="F" onchange="setTempUnit('F')">
+                  <label for="tempFormatF">Fahrenheit</label>
+                  <span style="font-size: 0.8em;">(this browser only)</span>
+                </td>
               </tr>
               <tr>
                 <td style="font-size: 0.65em;"><br><u>Reboot required:</u></td>

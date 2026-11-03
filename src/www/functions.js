@@ -287,6 +287,26 @@ function makeRfc952(src) {
     return dest;
 }
 
+// Temperature unit is a per-browser choice; the device always reports Celsius.
+function getTempUnit() {
+    return localStorage.getItem("tempUnit") === "F" ? "F" : "C";
+}
+
+function setTempUnit(unit) {
+    localStorage.setItem("tempUnit", unit);
+    showTemperature();
+}
+
+function showTemperature() {
+    const el = document.getElementById("TemperatureRead");
+    const c = serverStatus.TemperatureRead;
+    const unit = getTempUnit();
+    const sel = document.getElementById(unit === "F" ? "tempFormatF" : "tempFormatC");
+    if (sel) sel.checked = true;
+    if (!el || c === undefined) return;
+    el.innerHTML = (unit === "F" ? c * 9 / 5 + 32 : c).toFixed(1) + "&deg;" + unit;
+}
+
 function capitalizeFirstLetter(val) {
     return String(val).charAt(0).toUpperCase() + String(val).slice(1);
 }
@@ -753,9 +773,7 @@ function setElementsFromStatus(status) {
 
             case "TemperatureRead":
                 document.getElementById("dht22Row").style.display = "table-row";
-                // Use stored format from serverStatus (set when TemperatureReadFormat is processed)
-                var tempFormat = serverStatus.TemperatureReadFormat || "C";
-                document.getElementById(key).innerHTML = value.toFixed(1) + "&deg;" + tempFormat;
+                showTemperature();
                 break;
             case "HumidityRead":
                 document.getElementById("dht22Row").style.display = "table-row";
@@ -763,19 +781,7 @@ function setElementsFromStatus(status) {
                 break;
             case "dht22Pin":
                 document.getElementById(key).value = value;
-                document.getElementById("TemperatureReadFormatRow").style.display = (value >= 0) ? "table-row" : "none";
-                break;
-            case "TemperatureReadFormat":
-                serverStatus.TemperatureReadFormat = value; // Store in serverStatus
-                if (value === "F") {
-                    document.getElementById("tempFormatF").checked = true;
-                } else {
-                    document.getElementById("tempFormatC").checked = true;
-                }
-                // Update temperature display with correct format if temp value exists
-                if (serverStatus.TemperatureRead !== undefined) {
-                    document.getElementById("TemperatureRead").innerHTML = serverStatus.TemperatureRead.toFixed(1) + "&deg;" + value;
-                }
+                showTemperature();
                 break;
             case "aht20Detected":
                 document.getElementById("aht20Row").style.display = "table-row";
@@ -1497,7 +1503,6 @@ async function saveSettings() {
 
     let dht22Pin = parseInt(document.getElementById("dht22Pin").value);
     if (isNaN(dht22Pin)) dht22Pin = -1;
-    const TemperatureReadFormat = (document.getElementById("tempFormatF").checked) ? 'F' : 'C';
 
     // check IP addresses valid
     const regexIPv4 = /^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])$/i;
@@ -1549,7 +1554,6 @@ async function saveSettings() {
         "dcDebounceDuration", dcDebounceDuration,
         "homespanCLI", homespanCLI,
         "dht22Pin", dht22Pin,
-        "TemperatureReadFormat", TemperatureReadFormat,
         "lightHomeKit", lightHomeKit,
         "motionHomeKit", motionHomeKit,
     );
