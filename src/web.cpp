@@ -1043,6 +1043,14 @@ bool helperGarageDoorState(const std::string &key, const char *value, configSett
     return true;
 }
 
+#ifdef USE_GDOLIB
+bool helperTTChold(const std::string &key, const char *value, configSetting *action)
+{
+    toggle_ttc_hold();
+    return true;
+}
+#endif
+
 bool helperGarageLockState(const std::string &key, const char *value, configSetting *action)
 {
     set_lock((atoi(value) == 1) ? 1 : 0);
@@ -1165,6 +1173,9 @@ void handle_setgdo()
         {PSTR("garageLightOn"), {false, false, 0, helperGarageLightOn}},
         {PSTR("garageDoorState"), {false, false, 0, helperGarageDoorState}},
         {PSTR("garageLockState"), {false, false, 0, helperGarageLockState}},
+#ifdef USE_GDOLIB
+        {PSTR("ttcHold"), {false, false, 0, helperTTChold}},
+#endif
         {PSTR("credentials"), {false, false, 0, helperCredentials}}, // parse out wwwUsername and credentials
         {PSTR("updateUnderway"), {false, false, 0, helperUpdateUnderway}},
         {PSTR("factoryReset"), {true, false, 0, helperFactoryReset}},

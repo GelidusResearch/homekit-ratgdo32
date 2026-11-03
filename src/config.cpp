@@ -278,6 +278,7 @@ bool helperBuiltInTTC(const std::string &key, const char *value, configSetting *
         {
             ESP_LOGI(TAG, "Set built-in TTC to %d seconds", (int)userConfig->getBuiltInTTC());
             gdo_set_time_to_close((uint16_t)userConfig->getBuiltInTTC());
+            gdo_get_ttc_state();
         }
     }
 #else

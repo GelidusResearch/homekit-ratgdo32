@@ -44,6 +44,9 @@ extern void save_rolling_code();
 extern void reset_door();
 
 extern uint32_t is_ttc_active();
+#ifdef USE_GDOLIB
+extern void toggle_ttc_hold();
+#endif
 
 extern uint32_t id_code;
 extern uint32_t rolling_code;

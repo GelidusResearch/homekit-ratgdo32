@@ -316,8 +316,13 @@ function showTTCwarning(TTCvalue, TTCremaining, TTChold) {
         // built-in automatic close is off, hide the warning
         updateBuiltInLabel(0);
         document.getElementById("autoCloseWarning").style.display = "none";
+        document.getElementById("ttcHoldButton").style.display = "none";
     }
     else {
+        // Hold/Release button reflects state whether changed here or by the wall panel
+        const holdButton = document.getElementById("ttcHoldButton");
+        holdButton.value = TTChold ? "Release" : "Hold";
+        holdButton.style.display = "";
         // built-in automatic close is enabled for TTCvalue seconds
         if (TTCremaining) {
             // If we are in active countdown display mins:secs until time out
@@ -1228,6 +1233,21 @@ async function checkAuth(loader = true) {
         console.warn("Not Authenticated");
     }
     return auth;
+}
+
+// setGDO() only posts keys already in serverStatus, so the hold toggle posts directly.
+async function toggleTTChold() {
+    try {
+        if (!await checkAuth(false)) return;
+        const formData = new FormData();
+        formData.append("ttcHold", "1");
+        const response = await fetch("setgdo", { method: "POST", body: formData, signal: AbortSignal.timeout(2000) });
+        if (response.status !== 200) console.warn("Error toggling TTC hold");
+    } catch (err) {
+        console.error(`TTC hold toggle failed: ${err}`);
+    } finally {
+        loaderElem.style.visibility = "hidden";
+    }
 }
 
 async function setGDO(...args) {

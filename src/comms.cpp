@@ -511,6 +511,7 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
         break;
     case GDO_CB_EVENT_TTC:
         ESP_LOGI(TAG, "GDO event: TTC state: %d, seconds: %d", status->ttc_state, status->ttc_seconds);
+        garage_door.builtInTTChold = (status->ttc_state == GDO_TTC_STATE_HOLD);
         if (status->ttc_state == GDO_TTC_STATE_OFF)
         {
             garage_door.builtInTTC = 0;
@@ -526,16 +527,21 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
         break;
     case GDO_CB_EVENT_UPDATE_TTC:
         ESP_LOGI(TAG, "GDO event: TTC Countdown Update: %d", status->ttc_countdown);
+        garage_door.builtInTTChold = false;
         break;
     case GDO_CB_EVENT_HOLD_TTC:
+        // Reported whether hold was requested by us or by the wall panel
         ESP_LOGI(TAG, "GDO event: TTC Hold");
+        garage_door.builtInTTChold = true;
         break;
     case GDO_CB_EVENT_REL_TTC:
         ESP_LOGI(TAG, "GDO event: TTC Release");
+        garage_door.builtInTTChold = false;
         break;
     case GDO_CB_EVENT_CANCEL_TTC:
         if (status->ttc_state == GDO_TTC_STATE_OFF)
         {
+            garage_door.builtInTTChold = false;
             ESP_LOGI(TAG, "GDO event: TTC Off");
             garage_door.builtInTTC = 0;
             if (userConfig->getBuiltInTTC() != 0)
@@ -2980,6 +2986,19 @@ void send_set_ttc(uint16_t seconds)
 #endif
 
 #ifdef USE_GDOLIB
+void toggle_ttc_hold()
+{
+    // Built-in TTC only exists on Sec+ 2.0. New state arrives via the Pair3Resp event.
+    if (doorControlType != 2 || !garage_door.builtInTTC)
+    {
+        ESP_LOGW(TAG, "Ignore TTC hold/release, built-in TTC not active");
+        return;
+    }
+    ESP_LOGI(TAG, "Request built-in TTC %s", garage_door.builtInTTChold ? "release" : "hold");
+    gdo_enable_ttc();
+    gdo_get_ttc_state();
+}
+
 bool set_lock(bool value, bool verify)
 {
     // return value: true = lock state changed, else state unchanged
