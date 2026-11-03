@@ -257,7 +257,9 @@ void LOG::logToBuffer(const char *fmt, va_list args)
     msgBuffer->buffer[msgBuffer->head] = 0; // null terminate
 
     static bool inFn = false;
-    if (!inFn)
+    // Network sinks allocate (TCP/UDP buffers). At verbose levels skip them when heap is low
+    // so logging cannot starve the web server; serial and the ring buffer still get every line.
+    if (!inFn && ESP.getMaxAllocHeap() > 16 * 1024)
     {
         // Control recursion... make sure we don't get into a loop if any
         // of the functions we use here log a message.  This is known to happen
