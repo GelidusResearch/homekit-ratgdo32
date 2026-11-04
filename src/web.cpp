@@ -188,6 +188,7 @@ struct SSESubscription
     uint32_t heartbeatInterval;
     bool SSEconnected;
     int SSEfailCount;
+    int SSEskipCount;
     String clientUUID;
     bool logViewer;
 };
@@ -233,7 +234,20 @@ struct ActiveRequest
 ActiveRequest activeRequests[MAX_CONCURRENT_REQUESTS];
 int activeRequestCount = 0;
 
-#define CLIENT_WRITE_TIMEOUT 500
+#define CLIENT_WRITE_TIMEOUT 100
+#define SSE_MAX_SKIPS 5
+// WiFiClient::availableForWrite() is not implemented on ESP32 (always 0), so poll the socket.
+static bool clientWritable(WiFiClient &client)
+{
+    int fd = client.fd();
+    if (fd < 0)
+        return false;
+    fd_set wfds;
+    FD_ZERO(&wfds);
+    FD_SET(fd, &wfds);
+    struct timeval tv = {0, 0};
+    return select(fd + 1, NULL, &wfds, NULL, &tv) > 0 && FD_ISSET(fd, &wfds);
+}
 static char writeBuffer[512];
 bool clientWrite(WiFiClient client, const char *data)
 {
@@ -241,6 +255,9 @@ bool clientWrite(WiFiClient client, const char *data)
     size_t written = 0;
 #ifdef ESP8266
     client.flush(); // make sure previous data all sent.
+#else
+    if (!clientWritable(client))
+        return false;
 #endif
     written = client.write(data, len);
     if (written == 0)
@@ -1336,7 +1353,11 @@ void SSEheartbeat(SSESubscription *s)
         JSON_REMOVE_NL(json);
         // retry needed to before event:
         snprintf_P(writeBuffer, sizeof(writeBuffer), PSTR("event: message\ndata: %s\n\n"), json);
-        clientWrite(s->client, writeBuffer);
+        if (!clientWrite(s->client, writeBuffer) && ++s->SSEskipCount >= SSE_MAX_SKIPS)
+        {
+            ESP_LOGW(TAG, "Client %s (%s) not draining heartbeat, remove SSE subscription", s->clientIP.toString().c_str(), s->clientUUID.c_str());
+            removeSSEsubscription(s);
+        }
         GIVE_MUTEX();
         YIELD();
     }
@@ -1370,6 +1391,7 @@ void SSEHandler(uint32_t channel)
     server.sendContent_P(PSTR("HTTP/1.1 200 OK\nContent-Type: text/event-stream;\nConnection: keep-alive\nCache-Control: no-cache\nAccess-Control-Allow-Origin: *\n\n"));
     s.SSEconnected = true;
     s.SSEfailCount = 0;
+    s.SSEskipCount = 0;
     if (s.heartbeatInterval)
     {
         s.heartbeatTimer.attach_ms(s.heartbeatInterval * 1000, [&s]
@@ -1513,6 +1535,7 @@ void handle_subscribe()
     subscription[channel].heartbeatTimer = Ticker();
     subscription[channel].SSEconnected = false;
     subscription[channel].SSEfailCount = 0;
+    subscription[channel].SSEskipCount = 0;
     subscription[channel].clientUUID = server.arg(id);
     subscription[channel].logViewer = logViewer;
     subscription[channel].heartbeatInterval = heartbeatInterval;
@@ -1596,42 +1619,45 @@ void SSEBroadcastState(const char *data, BroadcastType type)
         {
             if (subscription[i].client.connected())
             {
+                const char *event;
                 if (type == LOG_MESSAGE)
                 {
-                    if (subscription[i].logViewer)
-                    {
-                        if (snprintf_P(writeBuffer, sizeof(writeBuffer), PSTR("event: logger\ndata: %s\n\n"), data) >= (int)sizeof(writeBuffer))
-                        {
-                            // Will not fit in our write buffer, let system printf handle
-#ifdef ESP8266
-                            subscription[i].client.flush(); // make sure previous data all sent.
-#endif
-                            subscription[i].client.printf("event: logger\ndata: %s\n\n", data);
-                        }
-                        else
-                        {
-                            clientWrite(subscription[i].client, writeBuffer);
-                        }
-                    }
+                    if (!subscription[i].logViewer)
+                        continue;
+                    event = "logger";
                 }
                 else if (type == RATGDO_STATUS)
+                {
+                    event = "message";
+                }
+                else
+                {
+                    continue;
+                }
+
+                // Truncates if too long to fit; never allocates
+                int len = snprintf_P(writeBuffer, sizeof(writeBuffer), PSTR("event: %s\ndata: %s\n\n"), event, data);
+                if (len >= (int)sizeof(writeBuffer))
+                    len = sizeof(writeBuffer) - 1;
+
+                // Skip a client whose socket can't accept data right now rather than block on it.
+                if (!clientWritable(subscription[i].client))
+                {
+                    if (++subscription[i].SSEskipCount >= SSE_MAX_SKIPS)
+                    {
+                        ESP_LOGW(TAG, "Client %s (%s) not draining SSE data, remove SSE subscription", subscription[i].clientIP.toString().c_str(), subscription[i].clientUUID.c_str());
+                        removeSSEsubscription(&subscription[i]);
+                    }
+                    continue;
+                }
+                subscription[i].SSEskipCount = 0;
+                if (type == RATGDO_STATUS)
                 {
                     ESP_LOGV(TAG, "Client %s (%s) send status SSE on channel %d, data: %s",
                              IPAddress(subscription[i].clientIP).toString().c_str(),
                              subscription[i].clientUUID.c_str(), i, data);
-                    if (snprintf_P(writeBuffer, sizeof(writeBuffer), PSTR("event: message\ndata: %s\n\n"), data) >= (int)sizeof(writeBuffer))
-                    {
-                        // Will not fit in our write buffer, let system printf handle
-#ifdef ESP8266
-                        subscription[i].client.flush(); // make sure previous data all sent.
-#endif
-                        subscription[i].client.printf("event: message\ndata: %s\n\n", data);
-                    }
-                    else
-                    {
-                        clientWrite(subscription[i].client, writeBuffer);
-                    }
                 }
+                clientWrite(subscription[i].client, writeBuffer);
             }
             else
             {
