@@ -429,7 +429,7 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
             gdo_sync_retry_count = 0;
             comms_status_done = true;
         }
-        if (status->protocol == GDO_PROTOCOL_SEC_PLUS_V2 || status->protocol == GDO_PROTOCOL_SEC_PLUS_V1) {
+        if (status->protocol == GDO_PROTOCOL_SEC_PLUS_V2 || status->protocol == GDO_PROTOCOL_SEC_PLUS_V1 || status->protocol == GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL) {
 
 
             gdo_set_obst_from_status(userConfig->getObstFromStatus());
@@ -621,7 +621,7 @@ void setup_comms()
         return;
 
     if (doorControlType == 0)
-        doorControlType = userConfig->getGDOSecurityType();
+        doorControlType = userConfig->getDoorControlType();
 
 #if defined(ESP8266) || !defined(USE_GDOLIB)
     IRAM_START(TAG);
@@ -739,7 +739,9 @@ void setup_comms()
         }
         else
         {
-            if ((err = gdo_set_protocol(GDO_PROTOCOL_SEC_PLUS_V1)) != ESP_OK)
+            // Setting 4 (Sec+ w/ Wall Panel): wait for the real panel instead of emulating one
+            gdo_protocol_type_t v1_protocol = (userConfig->getGDOSecurityType() == 4) ? GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL : GDO_PROTOCOL_SEC_PLUS_V1;
+            if ((err = gdo_set_protocol(v1_protocol)) != ESP_OK)
             {
                 ESP_LOGE(TAG, "gdo_set_protocol failed with error: %d", err);
                 return;
@@ -1001,7 +1003,8 @@ void wallPlate_Emulation()
     }
     else
     {
-        if (!emulateWallPanel && !wallPanelDetected)
+        // GDOSecurityType 4 means a real wall panel is expected, so never emulate one
+        if (!emulateWallPanel && !wallPanelDetected && userConfig->getGDOSecurityType() != 4)
         {
             emulateWallPanel = true;
             garage_door.wallPanelEmulated = true;

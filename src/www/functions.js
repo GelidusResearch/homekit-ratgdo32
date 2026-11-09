@@ -428,8 +428,9 @@ function setElementsFromStatus(status) {
                 document.getElementById("lastRebootAt").innerHTML = date.toLocaleString(tzFormat, tzOptions);
                 break;
             case "GDOSecurityType":
-                document.getElementById(key).innerHTML = (value == 1) ? "Sec+" : (value == 2) ? "Sec+&nbsp;2.0" : "Dry&nbsp;Contact";
+                document.getElementById(key).innerHTML = (value == 1) ? "Sec+" : (value == 4) ? "Sec+&nbsp;w/&nbsp;Wall&nbsp;Panel" : (value == 2) ? "Sec+&nbsp;2.0" : "Dry&nbsp;Contact";
                 document.getElementById("gdosec1").checked = (value == 1);
+                document.getElementById("gdosec1wp").checked = (value == 4);
                 document.getElementById("gdosec2").checked = (value == 2);
                 document.getElementById("gdodrycontact").checked = (value == 3);
                 document.getElementById("builtInTTCrow").style.display = (value == 2) ? "table-row" : "none";
@@ -1431,6 +1432,7 @@ async function saveSettings() {
         return;
     }
     const gdoSec = (document.getElementById("gdosec1").checked) ? '1'
+        : (document.getElementById("gdosec1wp").checked) ? '4'
         : (document.getElementById("gdosec2").checked) ? '2' : '3';
     const pwReq = (document.getElementById("pwreq").checked) ? '1' : '0';
 

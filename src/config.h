@@ -184,6 +184,8 @@ public:
     const char *getwwwUsername() { return (std::get<configStr>(get(cfg_wwwUsername)).str); };
     const char *getwwwCredentials() { return (std::get<configStr>(get(cfg_wwwCredentials)).str); };
     uint32_t getGDOSecurityType() { return std::get<int>(get(cfg_GDOSecurityType)); };
+    // 4 = Sec+ 1.0 with a real wall panel (no emulation), runs the Sec+ 1.0 protocol
+    uint32_t getDoorControlType() { return (getGDOSecurityType() == 4) ? 1 : getGDOSecurityType(); };
     uint32_t getTTCseconds() { return std::get<int>(get(cfg_TTCseconds)); };
     bool getTTClight() { return std::get<bool>(get(cfg_TTClight)); };
     uint32_t getRebootSeconds() { return std::get<int>(get(cfg_rebootSeconds)); };

@@ -50,7 +50,7 @@ void setup_drycontact()
     ESP_LOGI(TAG, "=== Setting up dry contact protocol");
 
     if (doorControlType == 0)
-        doorControlType = userConfig->getGDOSecurityType();
+        doorControlType = userConfig->getDoorControlType();
 
     pinMode(DRY_CONTACT_OPEN_PIN, INPUT_PULLUP);
     pinMode(DRY_CONTACT_CLOSE_PIN, INPUT_PULLUP);
