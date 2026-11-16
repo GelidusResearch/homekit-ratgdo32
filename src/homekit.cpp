@@ -807,6 +807,11 @@ void setup_homekit()
     // homeSpan.setLogLevel(0); Zero is default (top level messages only), comment out so can be controlled by Improv setup.
     homeSpan.setSketchVersion(AUTO_VERSION);
     homeSpan.setHostNameSuffix("");
+    // HomeSpan calls WiFi.begin() directly on connect/reconnect, so set the DHCP hostname here too
+    homeSpan.setWifiBegin([](const char *s, const char *p)
+                          {
+        WiFi.hostname(device_name_rfc952);
+        WiFi.begin(s, p); });
     homeSpan.setPortNum(5556);
     // We will manage LED flashing ourselves
     // homeSpan.setStatusPin(LED_BUILTIN);
