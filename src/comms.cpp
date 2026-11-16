@@ -428,6 +428,12 @@ static void gdo_event_handler(const gdo_status_t *status, gdo_cb_event_t event, 
         {
             gdo_sync_retry_count = 0;
             comms_status_done = true;
+            if (userConfig->getGDOSecurityType() == 5)
+            {
+                // Auto: adopt the protocol gdolib detected so the rest of the firmware and web UI use it.
+                doorControlType = (status->protocol == GDO_PROTOCOL_SEC_PLUS_V2) ? 2 : 1;
+                ESP_LOGI(TAG, "Auto protocol detected: doorControlType %" PRIu32, doorControlType);
+            }
         }
         if (status->protocol == GDO_PROTOCOL_SEC_PLUS_V2 || status->protocol == GDO_PROTOCOL_SEC_PLUS_V1 || status->protocol == GDO_PROTOCOL_SEC_PLUS_V1_WITH_SMART_PANEL) {
 
@@ -617,6 +623,12 @@ void initialize_gdo_codes(uint32_t id)
 
 void setup_comms()
 {
+    // doorControlType values:
+    // 0 = not initialized
+    // 1 = Sec+ 1.0 (also Sec+ w/Wall Panel, GDOSecurityType 4)
+    // 2 = Sec+ 2.0
+    // 3 = Dry Contact. Set from GDOSecurityType via userConfig->getDoorControlType()
+
     if (comms_setup_done)
         return;
 
@@ -683,8 +695,10 @@ void setup_comms()
     IRAM_END(TAG);
 #else // !USE_GDOLIB
     esp_err_t err = ESP_OK;
+    // gdolib detects the protocol during sync, so the protocol is not forced in this mode
+    const bool autoProtocol = (userConfig->getGDOSecurityType() == 5);
 
-    if ((doorControlType == 1) || (doorControlType == 2))
+    if ((doorControlType == 1) || (doorControlType == 2) || autoProtocol)
     {
         gdo_config_t gdo_conf = {
             .uart_num = UART_NUM_1,
@@ -725,10 +739,10 @@ void setup_comms()
         // always be ahead of what the GDO thinks it should be, and save it.
         rolling_code = (rolling_code != 0) ? rolling_code + MAX_CODES_WITHOUT_FLASH_WRITE : 0;
         ESP_LOGI(TAG, "rolling code %lu (0x%02X)", rolling_code, rolling_code);
-        if (doorControlType == 2)
+        if (doorControlType == 2 || autoProtocol)
         {
             gdo_set_min_command_interval(tx_minimum_delay);
-            if ((err = gdo_set_protocol(GDO_PROTOCOL_SEC_PLUS_V2)) != ESP_OK)
+            if (!autoProtocol && (err = gdo_set_protocol(GDO_PROTOCOL_SEC_PLUS_V2)) != ESP_OK)
             {
                 ESP_LOGE(TAG, "gdo_set_protocol failed with error: %d", err);
                 return;

@@ -420,6 +420,11 @@ userSettings::userSettings()
     char *TemperatureReadFormatBuf = static_cast<char *>(malloc(2));
     strlcpy(TemperatureReadFormatBuf, "C", 2);
 #endif
+#ifdef USE_GDOLIB
+    const int defaultGDOSecurityType = 5; // Auto protocol detect
+#else
+    const int defaultGDOSecurityType = 2;
+#endif
     //  key, {reboot, wifiChanged, value, fn to call}
     settings = {
         {cfg_deviceName, {false, false, (configStr){DEVICE_NAME_SIZE, default_device_name}, setDeviceName}}, // call fn to set global
@@ -435,7 +440,7 @@ userSettings::userSettings()
         {cfg_wwwUsername, {false, false, (configStr){32, usernameBuf}, NULL}},
         //  Credentials are MD5 Hash... server.credentialHash(username, realm, "password");
         {cfg_wwwCredentials, {false, false, (configStr){36, credentialsBuf}, NULL}},
-        {cfg_GDOSecurityType, {true, false, 2, helperGDOSecurityType}}, // call fn to reset door
+        {cfg_GDOSecurityType, {true, false, defaultGDOSecurityType, helperGDOSecurityType}}, // call fn to reset door
         {cfg_TTCseconds, {false, false, 5, NULL}},
         {cfg_TTClight, {false, false, true, NULL}},
         {cfg_rebootSeconds, {true, true, 0, NULL}},

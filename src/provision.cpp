@@ -70,7 +70,7 @@ void disable_improv()
     suppressSerialLog = false;
 #ifdef USE_HOMESPAN
     ESP_LOGI(TAG, "Enable HomeSpan logging and serial CLI. Return to RATGDO CLI with command '@c' or '@C'");
-    homeSpan.setLogLevel(0);
+    homeSpan.setLogLevel(2);
     homeSpan.setSerialInputDisable(false);
 #endif
     return;

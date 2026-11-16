@@ -241,7 +241,11 @@ zero disables parking assist laser. Parking assist is triggered if an arriving v
 
 ### Door Protocol
 
-Set the protocol for your model of garage door opener. This defaults to Security+ 2.0 and you should only change this if necessary. Note that the changing the door protocol also resets the door opener rolling codes and whether there is a motion sensor (this will be automatically detected after reset).
+Set the protocol for your model of garage door opener. This defaults to Security+ 2.0 (or Auto in GDOLIB builds) and you should only change this if necessary. Note that the changing the door protocol also resets the door opener rolling codes and whether there is a motion sensor (this will be automatically detected after reset).
+
+### Auto protocol detect _(GDOLIB builds only)_
+
+When the ratgdo firmware is built with the external GDOLIB library, the **Auto** option lets the firmware detect whether the garage door opener uses Security+ 1.0 or Security+ 2.0 when it starts. The detected protocol is shown in the Door Protocol status as `Auto (Sec+)` or `Auto (Sec+ 2.0)`, and detection repeats on every boot. Auto is the first option in the list and is the default for new installs in GDOLIB builds; an existing saved protocol is not changed.
 
 ### Debounce duration
 

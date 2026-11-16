@@ -329,10 +329,44 @@ function applyTTCMode() {
     if (builtIn) updateBuiltInLabel(document.getElementById("builtInTTC").value);
 }
 
+// Door protocol in effect. Auto (5) uses the protocol gdolib detected, which is 0 until detection completes.
+function effectiveGDOSecurityType() {
+    const value = serverStatus.GDOSecurityType;
+    return (value == 5) ? (serverStatus.gdoDetectedType || 0) : value;
+}
+
+function renderGDOSecurityType() {
+    const value = serverStatus.GDOSecurityType;
+    const effective = effectiveGDOSecurityType();
+    const detectedLabel = (effective == 1) ? "Sec+" : (effective == 2) ? "Sec+&nbsp;2.0" : "detecting";
+    document.getElementById("GDOSecurityType").innerHTML = (value == 1) ? "Sec+" : (value == 4) ? "Sec+&nbsp;w/&nbsp;Wall&nbsp;Panel" : (value == 2) ? "Sec+&nbsp;2.0" : (value == 5) ? `Auto&nbsp;(${detectedLabel})` : "Dry&nbsp;Contact";
+    document.getElementById("gdosec1").checked = (value == 1);
+    document.getElementById("gdosec1wp").checked = (value == 4);
+    document.getElementById("gdosec2").checked = (value == 2);
+    document.getElementById("gdodrycontact").checked = (value == 3);
+    document.getElementById("gdosecauto").checked = (value == 5);
+    document.getElementById("gdosecautoSpan").style.display = serverStatus.gdoAutoAvailable ? "" : "none";
+    document.getElementById("builtInTTCrow").style.display = (effective == 2) ? "table-row" : "none";
+    if (effective != 2) showTTCwarning(0, 0, false);
+    applyTTCMode();
+    document.getElementById("lockButton").style.display = (value != 3) ? "inline-block" : "none";
+    document.getElementById("doorButton").style.margin = (value != 3) ? "" : "auto"; // auto will center the button
+    document.getElementById("lightButton").style.display = (value != 3) ? "inline-block" : "none";
+    document.getElementById("lockLightRow").style.display = (value != 3) ? "table-row" : "none";
+    document.getElementById("dcOpenClose").disabled = (value == 3);
+    document.getElementById("obstFromStatus").disabled = (value == 3);
+    document.getElementById("useToggle").disabled = (effective != 2);
+    document.getElementById("lightHomeKit").disabled = (value == 3);
+    document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
+    document.getElementById("dcDebounceDuration").disabled = (value != 3);
+    document.getElementById("motionMotion").disabled = (effective != 2);
+    toggleHardwiredBypassRow();
+}
+
 // Show or hide the warning about GDO's built-in automatic close timer
 function showTTCwarning(TTCvalue, TTCremaining, TTChold) {
     // built-in automatic close only exists on Sec+ 2.0, otherwise the software Door Close Delay is used
-    if (TTCvalue == 0 || serverStatus.GDOSecurityType != 2) {
+    if (TTCvalue == 0 || effectiveGDOSecurityType() != 2) {
         // built-in automatic close is off, hide the warning
         updateBuiltInLabel(0);
         document.getElementById("autoCloseWarning").style.display = "none";
@@ -428,26 +462,8 @@ function setElementsFromStatus(status) {
                 document.getElementById("lastRebootAt").innerHTML = date.toLocaleString(tzFormat, tzOptions);
                 break;
             case "GDOSecurityType":
-                document.getElementById(key).innerHTML = (value == 1) ? "Sec+" : (value == 4) ? "Sec+&nbsp;w/&nbsp;Wall&nbsp;Panel" : (value == 2) ? "Sec+&nbsp;2.0" : "Dry&nbsp;Contact";
-                document.getElementById("gdosec1").checked = (value == 1);
-                document.getElementById("gdosec1wp").checked = (value == 4);
-                document.getElementById("gdosec2").checked = (value == 2);
-                document.getElementById("gdodrycontact").checked = (value == 3);
-                document.getElementById("builtInTTCrow").style.display = (value == 2) ? "table-row" : "none";
-                if (value != 2) showTTCwarning(0, 0, false);
-                applyTTCMode();
-                document.getElementById("lockButton").style.display = (value != 3) ? "inline-block" : "none";
-                document.getElementById("doorButton").style.margin = (value != 3) ? "" : "auto"; // auto will center the button
-                document.getElementById("lightButton").style.display = (value != 3) ? "inline-block" : "none";
-                document.getElementById("lockLightRow").style.display = (value != 3) ? "table-row" : "none";
-                document.getElementById("dcOpenClose").disabled = (value == 3);
-                document.getElementById("obstFromStatus").disabled = (value == 3);
-                document.getElementById("useToggle").disabled = (value != 2);
-                document.getElementById("lightHomeKit").disabled = (value == 3);
-                document.getElementById("dcDebounceDurationRow").style.opacity = (value == 3) ? 1 : 0.5;
-                document.getElementById("dcDebounceDuration").disabled = (value != 3);
-                document.getElementById("motionMotion").disabled = (value != 2);
-                toggleHardwiredBypassRow();
+            case "gdoDetectedType":
+                renderGDOSecurityType();
                 break;
             case "pinBasedObst":
                 //document.getElementById(key).innerHTML = (value == true) ? "&nbsp;(Pin-based)" : "&nbsp;(Message)";
@@ -1433,7 +1449,8 @@ async function saveSettings() {
     }
     const gdoSec = (document.getElementById("gdosec1").checked) ? '1'
         : (document.getElementById("gdosec1wp").checked) ? '4'
-        : (document.getElementById("gdosec2").checked) ? '2' : '3';
+        : (document.getElementById("gdosec2").checked) ? '2'
+        : (document.getElementById("gdosecauto").checked) ? '5' : '3';
     const pwReq = (document.getElementById("pwreq").checked) ? '1' : '0';
 
     const motionTriggers = getMotionTriggers();

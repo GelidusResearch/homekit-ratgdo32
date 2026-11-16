@@ -123,6 +123,7 @@ WebServer server(80);
 GarageDoor last_reported_garage_door;
 bool last_reported_paired = false;
 bool last_reported_assist_laser = false;
+uint32_t last_reported_doorControlType = 0;
 _millis_t lastDoorUpdateAt;
 _millis_t lastDoorOpenAt;
 _millis_t lastDoorCloseAt;
@@ -414,6 +415,9 @@ void web_loop()
 #endif
     // Conditional macros, only add if value has changed
     JSON_ADD_BOOL_C("paired", homekit_is_paired(), last_reported_paired);
+#ifdef USE_GDOLIB
+    JSON_ADD_INT_C("gdoDetectedType", doorControlType, last_reported_doorControlType);
+#endif
     JSON_ADD_STR_C("garageDoorState", DOOR_STATE(garage_door.current_state), garage_door.current_state, last_reported_garage_door.current_state);
     JSON_ADD_STR_C("garageLockState", REMOTES_STATE(garage_door.current_lock), garage_door.current_lock, last_reported_garage_door.current_lock);
     JSON_ADD_BOOL_C("garageLightOn", garage_door.light, last_reported_garage_door.light);
@@ -803,6 +807,12 @@ void build_status_json(char *json)
 #endif
     JSON_ADD_INT("wifiPower", userConfig->getWifiPower());
     JSON_ADD_INT(cfg_GDOSecurityType, (uint32_t)userConfig->getGDOSecurityType());
+#ifdef USE_GDOLIB
+    JSON_ADD_BOOL("gdoAutoAvailable", true);
+    JSON_ADD_INT("gdoDetectedType", doorControlType);
+#else
+    JSON_ADD_BOOL("gdoAutoAvailable", false);
+#endif
     JSON_ADD_BOOL("garageSec1Emulated", garage_door.wallPanelEmulated);
     JSON_ADD_STR("garageDoorState", garage_door.active ? DOOR_STATE(garage_door.current_state) : DOOR_STATE(255));
     JSON_ADD_STR("garageLockState", REMOTES_STATE(garage_door.current_lock));

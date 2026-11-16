@@ -1146,11 +1146,20 @@ DEV_TempHumidity::DEV_TempHumidity() : Service::TemperatureSensor()
     humidity = new Characteristic::CurrentRelativeHumidity(0.0);
 }
 
+static portMUX_TYPE tempHumMux = portMUX_INITIALIZER_UNLOCKED;
+static float pendingTemp = 0.0f;
+static float pendingHum = 0.0f;
+static bool pendingTempHum = false;
+
+// Called from the web context; stores the reading and lets loop() apply it on the HomeSpan poll task
 void DEV_TempHumidity::setValues(float temp, float hum)
 {
     ESP_LOGI(TAG, "HomeKit temperature: %.1f°C, humidity: %.1f%%", temp, hum);
-    temperature->setVal(temp);
-    humidity->setVal(hum);
+    portENTER_CRITICAL(&tempHumMux);
+    pendingTemp = temp;
+    pendingHum = hum;
+    pendingTempHum = true;
+    portEXIT_CRITICAL(&tempHumMux);
 }
 
 void DEV_TempHumidity::loop()
@@ -1160,7 +1169,24 @@ void DEV_TempHumidity::loop()
         GDOEvent e;
         xQueueReceive(event_q, &e, 0);
         // Event queue not currently used for temp/humidity
-        // Updates happen directly via setValues()
+    }
+
+    float temp = 0.0f, hum = 0.0f;
+    bool apply = false;
+    portENTER_CRITICAL(&tempHumMux);
+    if (pendingTempHum)
+    {
+        temp = pendingTemp;
+        hum = pendingHum;
+        pendingTempHum = false;
+        apply = true;
+    }
+    portEXIT_CRITICAL(&tempHumMux);
+
+    if (apply)
+    {
+        temperature->setVal(temp);
+        humidity->setVal(hum);
     }
 }
 #endif // USE_DHT22

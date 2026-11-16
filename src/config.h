@@ -185,7 +185,12 @@ public:
     const char *getwwwCredentials() { return (std::get<configStr>(get(cfg_wwwCredentials)).str); };
     uint32_t getGDOSecurityType() { return std::get<int>(get(cfg_GDOSecurityType)); };
     // 4 = Sec+ 1.0 with a real wall panel (no emulation), runs the Sec+ 1.0 protocol
+    // 5 = Auto protocol detect (USE_GDOLIB only), resolved to 1 or 2 after sync, so 0 until then
+#ifdef USE_GDOLIB
+    uint32_t getDoorControlType() { return (getGDOSecurityType() == 4) ? 1 : (getGDOSecurityType() == 5) ? 0 : getGDOSecurityType(); };
+#else
     uint32_t getDoorControlType() { return (getGDOSecurityType() == 4) ? 1 : getGDOSecurityType(); };
+#endif
     uint32_t getTTCseconds() { return std::get<int>(get(cfg_TTCseconds)); };
     bool getTTClight() { return std::get<bool>(get(cfg_TTClight)); };
     uint32_t getRebootSeconds() { return std::get<int>(get(cfg_rebootSeconds)); };
