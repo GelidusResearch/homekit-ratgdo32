@@ -420,6 +420,12 @@ void notify_new_ipv6_address()
 };
 #endif
 
+#ifdef USE_DHT22
+// Latest DHT22 reading, shared by web_loop and build_status_json
+static float dht22Temp = NAN;
+static float dht22Hum = NAN;
+#endif
+
 void web_loop()
 {
     if (!web_setup_done)
@@ -452,8 +458,6 @@ void web_loop()
     // DHT22 sensor read and config
     int dht22Pin = userConfig->getDHT22Pin();
     std::string tempFormat = userConfig->getDHT22TempFormat();
-    static float dht22Temp = NAN;
-    static float dht22Hum = NAN;
     static unsigned long lastDHT22Read = 0;
     static std::string lastTempFormat = "";
     const unsigned long DHT22_READ_INTERVAL = 60000; // 60 seconds
@@ -477,6 +481,11 @@ void web_loop()
             }
             dht22Hum = dht.readHumidity();
             lastDHT22Read = currentMillis;
+            // Only report a new reading; adding these every pass forced an SSE broadcast each loop.
+            if (!isnan(dht22Temp))
+                JSON_ADD_FLOAT("dht22Temp", dht22Temp);
+            if (!isnan(dht22Hum))
+                JSON_ADD_FLOAT("dht22Hum", dht22Hum);
 
 #ifndef ESP8266
             if (!isnan(dht22Temp) && !isnan(dht22Hum)) {
@@ -488,13 +497,6 @@ void web_loop()
                 notify_homekit_temperature_humidity(tempCelsius, dht22Hum);
             }
 #endif
-        }
-
-        if (!isnan(dht22Temp)) {
-            JSON_ADD_FLOAT("dht22Temp", dht22Temp);
-        }
-        if (!isnan(dht22Hum)) {
-            JSON_ADD_FLOAT("dht22Hum", dht22Hum);
         }
     }
 #endif // USE_DHT22
@@ -1144,6 +1146,11 @@ void build_status_json(char *json)
 #ifdef USE_DHT22
     JSON_ADD_INT(cfg_dht22Pin, (int32_t)userConfig->getDHT22Pin());
     JSON_ADD_STR(cfg_dht22TempFormat, userConfig->getDHT22TempFormat());
+    // Last reading, so a newly opened page doesn't wait for the next one
+    if (!isnan(dht22Temp))
+        JSON_ADD_FLOAT("dht22Temp", dht22Temp);
+    if (!isnan(dht22Hum))
+        JSON_ADD_FLOAT("dht22Hum", dht22Hum);
 #endif
     JSON_ADD_INT("webRequests", request_count);
     JSON_ADD_INT("webMaxResponseTime", max_response_time);
