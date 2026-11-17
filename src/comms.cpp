@@ -44,6 +44,42 @@
 
 static const char *TAG = "ratgdo-comms";
 
+// A board can leave these outputs unconnected (GPIO_NUM_NC); never drive them then.
+static void write_status_pin(int pin, uint8_t state)
+{
+    if (pin >= 0)
+        digitalWrite(pin, state);
+}
+
+static void setup_status_pin(int pin)
+{
+    if (pin < 0)
+        return;
+#ifdef ESP32
+    gpio_set_level(static_cast<gpio_num_t>(pin), 0);
+#endif
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW); // initial state, LOW == door closed or wall panel connected
+}
+
+static void configure_dry_contact_output(int pin)
+{
+    if (pin < 0)
+        return;
+#ifdef ESP32
+    gpio_set_level(static_cast<gpio_num_t>(pin), 0);
+    gpio_config_t config = {
+        .pin_bit_mask = (1ULL << pin),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_ENABLE,
+        .intr_type = GPIO_INTR_DISABLE};
+    gpio_config(&config);
+#endif
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+}
+
 bool comms_setup_done = false;
 
 /********************************** LOCAL STORAGE *****************************************/

@@ -167,7 +167,7 @@ function toggleDCOpenClose(radio) {
     document.getElementById("dcDebounceDuration").disabled = (value != 3);
     document.getElementById("motionMotion").disabled = (value != 2);
     // document.getElementById("encoderEnabled").disabled = (value != 3);
-    document.getElementById("wpDisconnectOnTx").disabled = (value != 1) || serverStatus.wpDisconnectSupported === false;
+    document.getElementById("wpDisconnectOnTx").disabled = (value != 1);
     toggleEncoderOptions();
     toggleHardwiredBypassRow();
 }
@@ -439,7 +439,8 @@ function setElementsFromStatus(status) {
                 document.getElementById("motionMotion").disabled = (value != 2);
                 //document.getElementById("encoderEnabled").disabled = (value != 3);
                 document.getElementById("gdoFirmwareRow").style.display = (value == 2) ? "table-row" : "none";
-                document.getElementById("wpDisconnectOnTx").disabled = (value != 1) || serverStatus.wpDisconnectSupported === false;
+                document.getElementById("wpDisconnectOnTx").disabled = (value != 1);
+                document.getElementById("wpDisconnectOnTxRow").style.display = ("wpDisconnectOnTx" in serverStatus) ? "table-row" : "none";
                 toggleEncoderOptions();
                 toggleHardwiredBypassRow();
                 break;
@@ -511,8 +512,8 @@ function setElementsFromStatus(status) {
                 document.getElementById("vehicleSetting").style.display = (value) ? "table-row" : "none";
                 document.getElementById("vehicleSettingsSpacer").style.display = (value) ? "table-row" : "none";
                 setVehicleConfigVisibility(value);
-                document.getElementById("laserSetting").style.display = (value && serverStatus.laserSupported !== false) ? "table-row" : "none";
-                document.getElementById("laserOnDoorOpenRow").style.display = (value && serverStatus.laserSupported !== false) ? "table-row" : "none";
+                document.getElementById("laserSetting").style.display = (value && "laserEnabled" in serverStatus) ? "table-row" : "none";
+                document.getElementById("laserOnDoorOpenRow").style.display = (value && "laserEnabled" in serverStatus) ? "table-row" : "none";
                 break;
             case "vehicleThreshold":
                 document.getElementById(key).value = value;
@@ -522,14 +523,6 @@ function setElementsFromStatus(status) {
             case "vehicleDist":
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("vehicleDistInch").innerHTML = Math.round(value / .254) / 10;
-                break;
-            case "laserSupported":
-                document.getElementById("laserSetting").style.display = value && serverStatus.distanceSensor ? "table-row" : "none";
-                document.getElementById("laserOnDoorOpenRow").style.display = value && serverStatus.distanceSensor ? "table-row" : "none";
-                break;
-            case "wpDisconnectSupported":
-                document.getElementById("wpDisconnectOnTxRow").style.display = value ? "table-row" : "none";
-                document.getElementById("wpDisconnectOnTx").disabled = !value || serverStatus.GDOSecurityType != 1;
                 break;
             case "laserEnabled":
                 document.getElementById(key).checked = value;

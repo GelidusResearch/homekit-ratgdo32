@@ -21,11 +21,10 @@ def block(source, declaration):
 
 class DryContactOutputs(unittest.TestCase):
     def test_disconnected_and_configured_outputs(self):
-        header = (ROOT / "src/ratgdo.h").read_text()
-        helpers = "\n".join(block(header, name) for name in [
-            "inline void write_status_pin(", "inline void setup_status_pin(",
-            "inline void configure_dry_contact_output("])
         source = (ROOT / "src/comms.cpp").read_text()
+        helpers = "\n".join(block(source, name) for name in [
+            "static void write_status_pin(", "static void setup_status_pin(",
+            "static void configure_dry_contact_output("])
         start = source.index("        // Dry contact commands\n", source.index("bool door_command(DoorAction action)\n{"))
         end = source.index("\n    }\n    return true;", start)
         command = source[start:end]
