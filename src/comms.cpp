@@ -826,8 +826,7 @@ void setup_comms()
         ESP_LOGI(TAG, "Use status messages for obstruction detection");
     }
     // set the status pin for output
-    if (doorControlType != DOOR_CONTROL_DRY_CONTACT)
-        setup_status_pin(STATUS_OBST_PIN);
+    setup_status_pin(STATUS_OBST_PIN);
 #endif
 
     // Restore previously saved door open/close duration history

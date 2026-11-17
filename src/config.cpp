@@ -153,7 +153,7 @@ static configSetting settings_defaults[] PROGMEM = {
     {cfg_useToggle, false, false, false, NULL},
     {cfg_dcDebounceDuration, true, false, 50, NULL},
     {cfg_obstFromStatus, true, false, false, NULL},
-#ifdef WALLPANEL_DISCONNECT_ON_TX
+#ifdef WALLPANEL_DISCONNECT_ON_TX    
     {cfg_wpDisconnectOnTx, true, false, true, NULL},
 #else
     {cfg_wpDisconnectOnTx, true, false, false, NULL},

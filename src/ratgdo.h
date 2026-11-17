@@ -127,19 +127,11 @@ const gpio_num_t DRY_CONTACT_CLOSE_PIN = (gpio_num_t)DRY_CONTACT_CLOSE_GPIO; // 
 #endif
 const gpio_num_t DRY_CONTACT_LIGHT_PIN = (gpio_num_t)DRY_CONTACT_LIGHT_GPIO; // toggle light
 #ifndef STATUS_DOOR_GPIO
-#if defined(GRGDO1_V1) || defined(GRGDO1_V2)
-#define STATUS_DOOR_GPIO GPIO_NUM_NC // GPIO26 is used by the Gelidus I2C bus
-#else
 #define STATUS_DOOR_GPIO GPIO_NUM_26
-#endif
 #endif
 const gpio_num_t STATUS_DOOR_PIN = (gpio_num_t)STATUS_DOOR_GPIO;
 #ifndef STATUS_OBST_GPIO
-#if defined(GRGDO1_V1) || defined(GRGDO1_V2)
-#define STATUS_OBST_GPIO GPIO_NUM_NC // GPIO25 is used by the Gelidus I2C bus
-#else
 #define STATUS_OBST_GPIO GPIO_NUM_25
-#endif
 #endif
 const gpio_num_t STATUS_OBST_PIN = (gpio_num_t)STATUS_OBST_GPIO;
 
@@ -156,11 +148,7 @@ const gpio_num_t DISCRETE_CLOSE_PIN = (gpio_num_t)DISCRETE_CLOSE_GPIO; // altern
 #ifdef RATGDO32_DISCO
 const gpio_num_t BEEPER_PIN = GPIO_NUM_33;
 #ifndef LASER_GPIO
-#if defined(GRGDO1_V1) || defined(GRGDO1_V2)
-#define LASER_GPIO GPIO_NUM_NC // GPIO23 is the Gelidus obstruction input
-#else
 #define LASER_GPIO GPIO_NUM_23
-#endif
 #endif
 const gpio_num_t LASER_PIN = (gpio_num_t)LASER_GPIO;
 #ifndef SENSOR_SDA_GPIO
@@ -220,7 +208,7 @@ enum LockTargetState : uint8_t
 };
 #endif
 
-// A disconnected output must never reconfigure a board's I2C or obstruction pins.
+// A board can leave these outputs unconnected (GPIO_NUM_NC); never drive them then.
 inline void write_status_pin(int pin, uint8_t state)
 {
     if (pin >= 0)
@@ -229,15 +217,13 @@ inline void write_status_pin(int pin, uint8_t state)
 
 inline void setup_status_pin(int pin)
 {
-    if (pin >= 0)
-    {
+    if (pin < 0)
+        return;
 #ifdef ESP32
-        gpio_set_level(static_cast<gpio_num_t>(pin), 0);
-#else
-        digitalWrite(pin, LOW);
+    gpio_set_level(static_cast<gpio_num_t>(pin), 0);
 #endif
-        pinMode(pin, OUTPUT);
-    }
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW); // initial state, LOW == door closed or wall panel connected
 }
 
 inline void configure_dry_contact_output(int pin)
