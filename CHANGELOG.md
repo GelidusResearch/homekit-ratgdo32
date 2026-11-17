@@ -4,6 +4,15 @@
 
 All notable changes to `homekit-ratgdo32` will be documented in this file. This project tries to adhere to [Semantic Versioning](http://semver.org/).
 
+## v1.5.1 (unreleased)
+
+* Security+ 2.0 commands that the door doesn't answer within a second are cleared instead of blocking later ones (upstream ratgdo/homekit-ratgdo32 #241).
+* A new static IP is checked with the link watchdog's pings: it falls back to DHCP only after two minutes without any reply, instead of after one lost ping (ratgdo/homekit-ratgdo32 #248).
+* Board pins come from build flags; the GRGDO1 status and laser outputs are marked not connected, so `comms.cpp` and `led.cpp` match upstream (ratgdo/homekit-ratgdo32 #249).
+* Remove the HTTP lifecycle experiment, which was on in release builds; it only acted while the WiFi link was bad, which the link watchdog now handles (ratgdo/homekit-ratgdo32 #250).
+* DHT22 fixes from GelidusResearch bug.fix: readings are sent only when new instead of forcing a status broadcast on every loop, new pages get the last reading, and HomeKit is updated from the HomeSpan task.
+* Remove the unused issue 19 diagnostics.
+
 ## v1.5.0 (unreleased)
 
 * Live updates no longer stall the device when a browser stops reading (ratgdo/homekit-ratgdo32 #239 and #240, which replace #210):
