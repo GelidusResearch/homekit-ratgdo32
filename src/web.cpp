@@ -60,7 +60,6 @@ extern "C" {
 #include "gdo.h"
 #endif
 #include "ratgdo.h"
-#include "runtime_diagnostics.h"
 #include "config.h"
 #include "comms.h"
 #include "web.h"
@@ -1589,7 +1588,6 @@ void handle_status()
     last_reported_garage_door = garage_door;
     server.sendHeader(F("Cache-Control"), F("no-cache, no-store"));
     server.send_P(200, type_json, json);
-    runtime_diagnostics_capture_tcp();
     response_time = _millis() - startTime;
     max_response_time = std::max(max_response_time, response_time);
     if (strlen(json) > STATUS_JSON_BUFFER_SIZE * 95 / 100)
