@@ -285,7 +285,9 @@ void setup()
     setup_vehicle();
 #endif
 #ifdef USE_AHT20
-    setup_aht20();
+    // A DHT22 is read instead when its pin is set
+    if (userConfig->getDHT22Pin() < 0)
+        setup_aht20();
 #endif
 #ifndef USE_GDOLIB
     setup_drycontact();

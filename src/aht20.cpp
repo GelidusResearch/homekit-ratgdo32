@@ -38,12 +38,12 @@ static const uint8_t AHT20_INIT[] = {0xBE, 0x08, 0x00};
 static const uint8_t AHT20_TRIGGER[] = {0xAC, 0x33, 0x00};
 static const uint8_t AHT20_BUSY = 0x80;
 static const uint8_t AHT20_CALIBRATED = 0x08;
-static const unsigned long AHT20_MEASURE_MS = 100; // datasheet: wait 80ms
+static const _millis_t AHT20_MEASURE_MS = 100; // datasheet: wait 80ms
 
 bool aht20_detected = false;
 static bool measuring = false;
 static bool triggered = false;
-static unsigned long measureStart = 0;
+static _millis_t measureStart = 0;
 
 // Wire's default 50ms timeout bounds every transfer
 static bool aht20_command(const uint8_t *cmd)
@@ -77,7 +77,13 @@ void setup_aht20()
 {
     if (vehicle_setup_done)
     {
-        // Wire is already up on the distance sensor's pins
+        // Wire is already up on the distance sensor's pins, and is never moved
+        // between devices (the VL53L1X library can spin on an I2C error)
+        if (AHT20_SDA_GPIO != SENSOR_SDA_PIN || AHT20_SCL_GPIO != SENSOR_SCL_PIN)
+        {
+            ESP_LOGI(TAG, "Not looking for an AHT20: on other pins it can't share the bus with the running distance sensor");
+            return;
+        }
         aht20_detected = aht20_probe();
     }
     else
@@ -101,13 +107,13 @@ void setup_aht20()
 void aht20_start()
 {
     triggered = aht20_command(AHT20_TRIGGER);
-    measureStart = millis();
+    measureStart = _millis();
     measuring = true;
 }
 
 bool aht20_read(float &celsius, float &humidity)
 {
-    if (!measuring || millis() - measureStart < AHT20_MEASURE_MS)
+    if (!measuring || _millis() - measureStart < AHT20_MEASURE_MS)
         return false;
     measuring = false;
 
