@@ -463,7 +463,7 @@ bool helperVehicleDepartingHomeKit(const std::string &key, const char *value, co
 bool helperLaser(const std::string &key, const char *value, configSetting *action)
 {
     userConfig->set(key, value);
-    enable_service_homekit_laser(LASER_PIN >= 0 && userConfig->getLaserEnabled() && userConfig->getLaserHomeKit());
+    enable_service_homekit_laser(userConfig->getLaserEnabled() && userConfig->getLaserHomeKit());
     return true;
 }
 #endif

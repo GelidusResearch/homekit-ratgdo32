@@ -707,14 +707,14 @@ void enable_service_homekit_vehicle(bool enable)
         homeSpan.updateDatabase();
     }
 
-    enable_service_homekit_laser(LASER_PIN >= 0 && userConfig->getLaserEnabled() && userConfig->getLaserHomeKit());
+    enable_service_homekit_laser(userConfig->getLaserEnabled() && userConfig->getLaserHomeKit());
 }
 
 bool enable_service_homekit_laser(bool enable)
 {
-    if (enable)
+    if (enable && LASER_PIN >= 0)
     {
-        if (!assistLaser && LASER_PIN >= 0 && userConfig->getLaserEnabled() && userConfig->getLaserHomeKit())
+        if (!assistLaser && userConfig->getLaserEnabled() && userConfig->getLaserHomeKit())
         {
             // Define Light accessory for parking assist laser
             // Create only if not already created, and user config requires it.

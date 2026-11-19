@@ -440,7 +440,6 @@ function setElementsFromStatus(status) {
                 //document.getElementById("encoderEnabled").disabled = (value != 3);
                 document.getElementById("gdoFirmwareRow").style.display = (value == 2) ? "table-row" : "none";
                 document.getElementById("wpDisconnectOnTx").disabled = (value != 1);
-                document.getElementById("wpDisconnectOnTxRow").style.display = ("wpDisconnectOnTx" in serverStatus) ? "table-row" : "none";
                 toggleEncoderOptions();
                 toggleHardwiredBypassRow();
                 break;
@@ -512,8 +511,6 @@ function setElementsFromStatus(status) {
                 document.getElementById("vehicleSetting").style.display = (value) ? "table-row" : "none";
                 document.getElementById("vehicleSettingsSpacer").style.display = (value) ? "table-row" : "none";
                 setVehicleConfigVisibility(value);
-                document.getElementById("laserSetting").style.display = (value && "laserEnabled" in serverStatus) ? "table-row" : "none";
-                document.getElementById("laserOnDoorOpenRow").style.display = (value && "laserEnabled" in serverStatus) ? "table-row" : "none";
                 break;
             case "vehicleThreshold":
                 document.getElementById(key).value = value;
@@ -526,6 +523,8 @@ function setElementsFromStatus(status) {
                 break;
             case "laserEnabled":
                 document.getElementById(key).checked = value;
+                document.getElementById("laserSetting").style.display = (serverStatus.distanceSensor) ? "table-row" : "none";
+                document.getElementById("laserOnDoorOpenRow").style.display = (serverStatus.distanceSensor) ? "table-row" : "none";
                 document.getElementById("laserButton").style.display = (value) ? "inline-block" : "none";
                 document.getElementById("laserHomeKit").disabled = !value;
                 document.getElementById("laserOnDoorOpen").disabled = !value;
@@ -557,8 +556,11 @@ function setElementsFromStatus(status) {
             case "useSWserial":
             case "obstFromStatus":
             case "reverseOnStop":
+                document.getElementById(key).checked = value;
+                break;
             case "wpDisconnectOnTx":
                 document.getElementById(key).checked = value;
+                document.getElementById("wpDisconnectOnTxRow").style.display = "table-row";
                 break;
             case "dcOpenClose":
                 document.getElementById(key).checked = value;

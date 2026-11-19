@@ -23,7 +23,7 @@ class DryContactOutputs(unittest.TestCase):
     def test_disconnected_and_configured_outputs(self):
         source = (ROOT / "src/comms.cpp").read_text()
         helpers = "\n".join(block(source, name) for name in [
-            "static void write_status_pin(", "static void setup_status_pin(",
+            "static void write_pin(", "static void setup_pin(",
             "static void configure_dry_contact_output("])
         start = source.index("        // Dry contact commands\n", source.index("bool door_command(DoorAction action)\n{"))
         end = source.index("\n    }\n    return true;", start)
@@ -64,7 +64,7 @@ bool command(DoorAction action) {
 void clear() { writes.clear(); modes.clear(); preloads.clear(); configs.clear(); timers.clear(); }
 void complete() { auto pending=timers; timers.clear(); for(auto fn:pending) fn(); }
 int main() {
-    configure_dry_contact_output(-1); setup_status_pin(-1); write_status_pin(-1,HIGH);
+    configure_dry_contact_output(-1); setup_pin(-1); write_pin(-1,HIGH);
     assert(writes.empty() && modes.empty() && preloads.empty() && configs.empty());
     configure_dry_contact_output(UART_TX_PIN);
     assert(preloads==std::vector<int>{22} && configs==std::vector<uint64_t>{1ULL<<22});

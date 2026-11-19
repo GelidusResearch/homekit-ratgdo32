@@ -1064,7 +1064,9 @@ void build_status_json(char *json)
     JSON_ADD_BOOL(cfg_obstFromStatus, userConfig->getObstFromStatus());
     JSON_ADD_INT(cfg_dcDebounceDuration, userConfig->getDCDebounceDuration());
     if (STATUS_DOOR_PIN >= 0)
+    {
         JSON_ADD_BOOL(cfg_wpDisconnectOnTx, userConfig->getWpDisconnectOnTx());
+    }
 #ifdef RATGDO_ENCODER
     JSON_ADD_BOOL("manuallyOperated", garage_door.manuallyOperated);
     JSON_ADD_BOOL(cfg_encoderEnabled, encoder_enabled);
