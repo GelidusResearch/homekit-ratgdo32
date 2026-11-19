@@ -123,6 +123,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_SetDistanceMode error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
@@ -130,6 +134,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_SetTimingBudgetInMs error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
@@ -137,6 +145,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_SetInterMeasurementInMs error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
@@ -144,6 +156,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_StartRanging error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
