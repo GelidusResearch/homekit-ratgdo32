@@ -80,6 +80,7 @@
 enum class PacketDataType
 {
     NoData,
+    Firmware,
     Status,
     Light,
     Lock,
@@ -282,6 +283,27 @@ struct LightCommandData
             break;
         }
         snprintf(buf, buflen, "LightState %s", l);
+    };
+};
+
+struct FirmwareCommandData
+{
+    uint8_t vMajor;
+    uint8_t vMinor;
+    uint8_t flags;
+    uint8_t parity;
+    FirmwareCommandData() = default;
+    explicit FirmwareCommandData(uint32_t pkt_data)
+    {
+        vMajor = ((pkt_data >> HI_BYTE_SHIFT) & HI_BYTE_MASK);
+        vMinor = ((pkt_data >> LO_BYTE_SHIFT) & LO_BYTE_MASK);
+        flags = ((pkt_data >> FLAG_SHIFT) & FLAG_MASK);
+        parity = ((pkt_data >> COMMAND_PARITY_SHIFT) & COMMAND_PARITY_MASK);
+    };
+
+    void to_string(char *buf, size_t buflen)
+    {
+        snprintf(buf, buflen, "vMajor %u, vMinor %u, Flags 0x%X, Parity 0x%X", vMajor, vMinor, flags, parity);
     };
 };
 
@@ -591,6 +613,11 @@ struct UpdateTtcCommandData
     };
 };
 
+enum class Pair2Flags : uint8_t
+{
+    SetTtcAck = 0x01,     // Response to a set time-to-close, value is time in seconds
+    LightTimerAck = 0x05, // Response to a set light timer, value is time in seconds
+};
 struct Pair2RespCommandData
 {
     uint16_t seconds;
@@ -620,8 +647,9 @@ enum class Pair3State : uint8_t
     WallpanelAck = 0x01, // from wall panel ID... when door finished opening (after the Pair3resp 0x02, Pair3 and UpdateTtc)
     UpdateAck = 0x02,    // door finished opening and there is a TTC active (after a Pair3 and UpdateTtc)
     CancelAck = 0x09,    // in response to a CancelTtc command AND ALSO when obstruction sensor changes from blocked to clear
+    HoldTTC = 0x0a,      // in resposse to a hold TTC request
     WarningStart = 0x0b, // TTC expires and door starts warning sequence (and after an UpdateTtc of zero seconds)
-    WarningEnd = 0x0c,   // end of warning sequence and door is about to start closing (6-8 seconds after 0x0B received)
+    WarningEnd = 0x0c,   // end of warning sequence and door is about to start closing (6-8 seconds after 0x0B received), or release of TTC hold
     ObstBlocked = 0x0e,  // obstruction sensor changes clear to blocked
 };
 struct Pair3RespCommandData
@@ -701,6 +729,7 @@ struct PacketData
     union
     {
         NoData no_data;
+        FirmwareCommandData firmware;
         StatusCommandData status;
         LockCommandData lock;
         LightCommandData light;
@@ -725,6 +754,10 @@ struct PacketData
         case PacketDataType::NoData:
             value.no_data.to_string(subbuf, subbuflen);
             snprintf(buf, buflen, "NoData: [%s]", subbuf);
+            break;
+        case PacketDataType::Firmware:
+            value.firmware.to_string(subbuf, subbuflen);
+            snprintf(buf, buflen, "Firmware Version: [%s]", subbuf);
             break;
         case PacketDataType::Status:
             value.status.to_string(subbuf, subbuflen);
@@ -784,6 +817,7 @@ public:
     enum PacketCommandValue : uint16_t
     {
         Unknown = 0x000,
+        FirmwareVersion = 0x001,
         GetStatus = 0x080,
         Status = 0x081,
         Obst1 = 0x084, // sent when an obstruction happens?
@@ -823,6 +857,8 @@ public:
         {
         case PacketCommandValue::Unknown:
             return "UNKNOWN";
+        case PacketCommandValue::FirmwareVersion:
+            return "FirmwareVersion";
         case PacketCommandValue::GetStatus:
             return "GetStatus";
         case PacketCommandValue::Status:
@@ -883,6 +919,8 @@ public:
         {
         case PacketCommand::GetStatus:
             return PacketCommand::GetStatus;
+        case PacketCommand::FirmwareVersion:
+            return PacketCommand::FirmwareVersion;
         case PacketCommandValue::Status:
             return PacketCommandValue::Status;
         case PacketCommandValue::Obst1:
@@ -979,6 +1017,13 @@ struct Packet
             m_data.type = PacketDataType::Unknown;
             m_data.value.unknown = UnknownCommandData(pkt_data);
             m_unknown_cmd = cmd; // save the original cmd that was unknown
+            break;
+        }
+
+        case PacketCommand::FirmwareVersion:
+        {
+            m_data.type = PacketDataType::Firmware;
+            m_data.value.firmware = FirmwareCommandData(pkt_data);
             break;
         }
 
@@ -1119,6 +1164,10 @@ struct Packet
             // nothing to do?
             break;
 
+        case PacketCommand::FirmwareVersion:
+            // nothing to encode (received only)
+            break;
+
         case PacketCommand::GetStatus:
             // no data
             break;
@@ -1217,7 +1266,7 @@ struct Packet
     {
         char buf[128];
         m_data.to_string(buf, sizeof(buf));
-        ESP_LOGI(TAG, "PACKET(0x%03X from 0x%lX @ 0x%lX) %s - %s", m_pkt_cmd == PacketCommand::Unknown ? m_unknown_cmd : m_pkt_cmd, m_remote_id, m_rolling,
+        ESP_LOGD(TAG, "PACKET(0x%03X from 0x%lX @ 0x%lX) %s - %s", m_pkt_cmd == PacketCommand::Unknown ? m_unknown_cmd : m_pkt_cmd, m_remote_id, m_rolling,
                  PacketCommand::to_string(m_pkt_cmd), buf);
     };
 

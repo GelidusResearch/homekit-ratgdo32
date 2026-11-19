@@ -14,6 +14,9 @@
  */
 
 // C/C++ language includes
+#ifndef ESP8266
+#include <atomic>
+#endif
 
 // ESP system includes
 #ifdef ESP8266
@@ -23,6 +26,7 @@
 #include <LittleFS.h>
 #else
 #include <esp_core_dump.h>
+#include <esp_heap_caps.h>
 #include <esp_log.h>
 #include <ping/ping_sock.h>
 #endif
@@ -44,6 +48,12 @@
 #endif
 #ifndef USE_GDOLIB
 #include "drycontact.h"
+#endif
+#ifdef RATGDO_ENCODER
+#include "encoder.h"
+#endif
+#ifdef USE_AHT20
+#include "aht20.h"
 #endif
 
 // Logger tag
@@ -76,6 +86,16 @@ GarageDoor garage_door = {
     .builtInTTC = 0,
     .builtInTTCremaining = 0,
     .builtInTTChold = false,
+#ifndef ESP8266
+    .room_occupancy_timeout = 0,
+    .room_occupied = false,
+#endif
+#ifdef RATGDO_ENCODER
+    .manuallyOperated = false,
+    .protocol_door_state = (GarageDoorCurrentState)0xFF,
+    .encoder_door_state = (GarageDoorCurrentState)0xFF,
+    .encoder_door_position = 0xFF, // unknown
+#endif
 };
 
 // Some initialization is postponed until after we have an IP address
@@ -103,6 +123,9 @@ void stackCheckFn()
 uint32_t free_heap_at_boot = 0;
 uint32_t free_heap = (1024 * 1024);
 uint32_t min_heap = (1024 * 1024);
+#ifndef ESP8266
+uint32_t max_alloc_heap = 0;
+#endif
 #ifdef MMU_IRAM_HEAP
 uint32_t free_iram_at_boot = 0;
 uint32_t free_iram = (1024 * 1024);
@@ -114,7 +137,6 @@ _millis_t next_heap_check = 0;
 
 // Buffer to hold our status as JSON string
 char *status_json = NULL;
-char *loop_json = NULL;
 
 // Forward declare functions
 bool suspend_service_loop = false;
@@ -126,11 +148,8 @@ static _millis_t wifiConnectTimeout = 0;
 
 #ifndef ESP8266
 // on ESP8266 ping is implemented in wifi.cpp
-static bool ping_failure = false;
-static bool ping_timed_out = false;
-static esp_ping_handle_t ping;
-static void ping_start();
-static void ping_stop();
+static void link_watchdog_loop(_millis_t current_millis);
+static void link_watch_verify_static_ip();
 #endif
 
 /****************************************************************************
@@ -229,14 +248,6 @@ void setup()
         return;
     }
     ESP_LOGI(TAG, "Allocated buffer for status JSON, size: %d", STATUS_JSON_BUFFER_SIZE);
-
-    loop_json = static_cast<char *>(malloc(LOOP_JSON_BUFFER_SIZE));
-    if (!loop_json)
-    {
-        ESP_LOGE(TAG, "Failed to allocated buffer for loop JSON, size: %d", LOOP_JSON_BUFFER_SIZE);
-        return;
-    }
-    ESP_LOGI(TAG, "Allocated buffer for loop JSON, size: %d", LOOP_JSON_BUFFER_SIZE);
     IRAM_END(TAG);
 
     if (softAPmode)
@@ -273,8 +284,16 @@ void setup()
 #ifdef RATGDO32_DISCO
     setup_vehicle();
 #endif
+#ifdef USE_AHT20
+    // A DHT22 is read instead when its pin is set
+    if (userConfig->getDHT22Pin() < 0)
+        setup_aht20();
+#endif
 #ifndef USE_GDOLIB
     setup_drycontact();
+#endif
+#ifdef RATGDO_ENCODER
+    setup_encoder();
 #endif
 
     // Finally initialize WiFi and HomeKit
@@ -333,7 +352,7 @@ void loop()
         ESP_LOGI(TAG, "Free sys stack at boot:     %d", free_sys_stack_at_boot);
         ESP_LOGI(TAG, "Current minimum sys stack:  %d", free_sys_stack);
 #endif
-        if (doorControlType == 2)
+        if (doorControlType == DOOR_CONTROL_SEC_PLUS_V2)
         {
             ESP_LOGI(TAG, "Our ID code %lu (0x%02lX)", id_code, id_code);
             ESP_LOGI(TAG, "Our rolling code %lu (0x%02X)", rolling_code, rolling_code);
@@ -353,6 +372,9 @@ void loop()
     comms_loop();
 #ifndef USE_GDOLIB
     drycontact_loop();
+#endif
+#ifdef RATGDO_ENCODER
+    encoder_loop();
 #endif
 #ifdef ESP8266
     // On ESP8266 we handle WiFi and HomeKit ourselves
@@ -374,7 +396,7 @@ void loop()
 void service_timer_loop()
 {
     _millis_t current_millis = _millis();
-    static time_t lastSNTP = 0;
+    static time_t lastTimeLogged = 0;
     static _millis_t lastLEDblink = 0;
 
     if (current_millis - lastLEDblink >= LED_BLINK_INTERVAL)
@@ -397,15 +419,15 @@ void service_timer_loop()
 
     if (enableNTP && clockSet)
     {
-        if (clockSet != lastSNTP)
+        time_t timeNow = time(NULL);
+        if (timeNow - lastTimeLogged > 60 * 60 * 3) // log time every 3 hours
         {
-            lastSNTP = clockSet;
+            lastTimeLogged = timeNow;
             ESP_LOGI(TAG, "Current System time: %s", timeString());
         }
 
         if (lastRebootAt == 0)
         {
-            time_t timeNow = time(NULL);
             lastRebootAt = timeNow - (current_millis / 1000);
             ESP_LOGI(TAG, "System boot time:    %s", timeString(lastRebootAt));
             // Need to also set when last door open/close was
@@ -432,16 +454,26 @@ void service_timer_loop()
     if (current_millis - last_heap_check >= FREE_HEAP_CHECK_MS)
     {
         last_heap_check = current_millis;
+#ifdef ESP8266
         free_heap = ESP.getFreeHeap();
-        if (free_heap < min_heap)
+        const uint32_t lowest_heap = free_heap;
+#else
+        // Byte-addressable internal heap, which mDNS and lwIP allocate from. The SDK
+        // records the exact minimum, including dips between these checks.
+        constexpr uint32_t heapCaps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+        free_heap = heap_caps_get_free_size(heapCaps);
+        max_alloc_heap = heap_caps_get_largest_free_block(heapCaps);
+        const uint32_t lowest_heap = heap_caps_get_minimum_free_size(heapCaps);
+#endif
+        if (lowest_heap < min_heap)
         {
-            min_heap = free_heap;
+            min_heap = lowest_heap;
             ESP_LOGD(TAG, "Free heap dropped to %d", min_heap);
-            if (free_heap < MIN_FREE_HEAP)
-            {
-                ESP_LOGW(TAG, "Free heap dropped below %d, rebooting to maintain stability", MIN_FREE_HEAP);
-                sync_and_restart();
-            }
+        }
+        if (free_heap < MIN_FREE_HEAP)
+        {
+            ESP_LOGW(TAG, "Free heap dropped below %d, rebooting to maintain stability", MIN_FREE_HEAP);
+            sync_and_restart();
         }
 
 #ifdef MMU_IRAM_HEAP
@@ -494,21 +526,185 @@ void service_timer_loop()
             if (userConfig->getStaticIP())
             {
                 ESP_LOGI(TAG, "Connected with static IP, test gateway IP reachable");
-                ping_start();
+                link_watch_verify_static_ip();
             }
             wifiConnectTimeout = 0;
         }
         userConfig->set(cfg_wifiChanged, false);
     }
 
-    if (ping_failure)
+    link_watchdog_loop(current_millis);
+#endif
+}
+
+#ifndef ESP8266
+/****************************************************************************
+ * Link watchdog: recover when associated but not passing traffic.
+ *
+ * The device can stay associated to the access point while its link stops
+ * passing traffic (observed: 45-100% loss, multi-second RTT). Nothing raises a
+ * disconnect event in that state, so nothing recovers it. The caller pings the
+ * gateway periodically and feeds each ping session's sent/received counts here.
+ *
+ * A degraded window forces a WiFi reconnect, which cleared every device-side
+ * episode in the field. When the cause is the radio environment (e.g. a
+ * congested channel) nothing local helps, so reconnects that did not fix the
+ * link are spaced out exponentially instead of escalating. Rebooting is never
+ * used: it cleared none of the field episodes and costs a HomeKit outage each
+ * time. The scheduled reboot remains the backstop for a wedged device.
+ */
+// Calibration knobs: tune from field logs (syslog "Link" lines).
+#define LINK_CHECK_INTERVAL_MS (30 * 1000) // one ping session every 30s
+#define LINK_PINGS_PER_CHECK 5             // pings per session
+#define LINK_WINDOW_CHECKS 4               // sessions per evaluation window (~2 min)
+#define LINK_BAD_LOSS_PCT 30               // window loss that counts as degraded
+#define LINK_RECOVERED_WINDOWS 5           // healthy windows after reconnect to call it recovered
+#define LINK_BACKOFF_FIRST_WINDOWS 2       // windows between reconnects at first (~4 min)
+#define LINK_BACKOFF_MAX_WINDOWS 16        // backoff cap (~32 min)
+
+enum LinkAction : uint8_t
+{
+    LINK_NONE,
+    LINK_RECONNECT,
+    LINK_RECOVERED,
+    LINK_STATIC_IP_FAILED, // the static IP's gateway never answered a full window
+};
+
+struct LinkWatch
+{
+    bool armed = false;       // gateway has answered at least once (it does answer ping)
+    bool reconnected = false; // a reconnect was tried and has not yet proven recovered
+    bool skipWindow = false;  // discard the window that spans our own reconnect
+    uint8_t checks = 0;
+    uint8_t healthyWindows = 0;
+    uint8_t holdWindows = 0;                           // windows left before another reconnect
+    uint8_t backoffWindows = LINK_BACKOFF_FIRST_WINDOWS; // hold applied after the next reconnect
+    uint8_t staticIPChecks = 0;                        // sessions left for a new static IP's gateway to answer
+    uint16_t sent = 0;
+    uint16_t lost = 0;
+};
+
+struct LinkResult
+{
+    LinkAction action;
+    bool evaluated;      // a window completed on this call
+    uint8_t lossPct;     // loss of the completed window
+    uint8_t holdWindows; // after LINK_RECONNECT: windows until another one is allowed
+};
+
+static LinkResult link_watch_step(LinkWatch &w, uint32_t sent, uint32_t received)
+{
+    LinkResult r = {LINK_NONE, false, 0, 0};
+    if (received > sent)
+        received = sent;
+    if (received > 0)
+        w.armed = true;
+    if (w.staticIPChecks > 0 && sent > 0)
     {
-        ping_failure = false; // reset, so we only come in here once
-        if (userConfig->getStaticIP())
+        if (w.armed)
+            w.staticIPChecks = 0;
+        else if (--w.staticIPChecks == 0)
+            r.action = LINK_STATIC_IP_FAILED;
+    }
+    // Never act against a gateway that has never answered ping.
+    if (!w.armed || sent == 0)
+        return r;
+
+    w.sent += sent;
+    w.lost += sent - received;
+    if (++w.checks < LINK_WINDOW_CHECKS)
+        return r;
+
+    r.evaluated = true;
+    r.lossPct = (uint8_t)((w.lost * 100u) / w.sent);
+    w.checks = 0;
+    w.sent = 0;
+    w.lost = 0;
+    if (w.holdWindows > 0)
+        w.holdWindows--;
+
+    if (w.skipWindow)
+    {
+        w.skipWindow = false;
+        r.evaluated = false;
+        return r;
+    }
+
+    if (r.lossPct >= LINK_BAD_LOSS_PCT)
+    {
+        w.healthyWindows = 0;
+        if (w.holdWindows == 0)
         {
-            // We timed out trying to ping gateway set by static IP, revert to DHCP
-            ping_stop();
-            ESP_LOGI(TAG, "Unable to ping Gateway, reset to DHCP to acquire IP address and reconnect");
+            w.reconnected = true;
+            w.skipWindow = true;
+            w.holdWindows = w.backoffWindows;
+            if (w.backoffWindows < LINK_BACKOFF_MAX_WINDOWS)
+                w.backoffWindows *= 2;
+            r.action = LINK_RECONNECT;
+            r.holdWindows = w.holdWindows;
+        }
+    }
+    else if (w.reconnected && ++w.healthyWindows >= LINK_RECOVERED_WINDOWS)
+    {
+        w.reconnected = false;
+        w.healthyWindows = 0;
+        w.holdWindows = 0;
+        w.backoffWindows = LINK_BACKOFF_FIRST_WINDOWS;
+        r.action = LINK_RECOVERED;
+    }
+    return r;
+}
+
+static esp_ping_handle_t link_ping = NULL;
+static std::atomic<bool> link_ping_done{false};
+static LinkWatch link_watch;
+
+// After a WiFi settings change with a static IP: fall back to DHCP if the
+// gateway answers none of the pings in the next window.
+static void link_watch_verify_static_ip()
+{
+    link_watch.staticIPChecks = LINK_WINDOW_CHECKS;
+}
+
+static void link_ping_noop(esp_ping_handle_t hdl, void *args) {}
+static void link_ping_end(esp_ping_handle_t hdl, void *args)
+{
+    // Runs in the ping task: only signal; the main loop reads and deletes the session.
+    link_ping_done.store(true);
+}
+
+static void link_watchdog_loop(_millis_t current_millis)
+{
+    static _millis_t last_check = 0;
+
+    if (link_ping)
+    {
+        if (!link_ping_done.load())
+            return;
+        uint32_t sent = 0, received = 0;
+        esp_ping_get_profile(link_ping, ESP_PING_PROF_REQUEST, &sent, sizeof(sent));
+        esp_ping_get_profile(link_ping, ESP_PING_PROF_REPLY, &received, sizeof(received));
+        esp_ping_delete_session(link_ping);
+        link_ping = NULL;
+
+        bool wasArmed = link_watch.armed;
+        LinkResult r = link_watch_step(link_watch, sent, received);
+        if (!wasArmed && link_watch.armed)
+            ESP_LOGI(TAG, "Link watchdog armed: gateway %s answers ping (%lu/%lu), RSSI %d dBm",
+                     WiFi.gatewayIP().toString().c_str(), received, sent, WiFi.RSSI());
+        uint32_t windowSecs = LINK_WINDOW_CHECKS * LINK_CHECK_INTERVAL_MS / 1000;
+        switch (r.action)
+        {
+        case LINK_RECONNECT:
+            ESP_LOGW(TAG, "Link degraded: %u%% gateway ping loss over %lus, RSSI %d dBm. Reconnecting WiFi (next reconnect no sooner than %lus)",
+                     r.lossPct, windowSecs, WiFi.RSSI(), r.holdWindows * windowSecs);
+            // HomeSpan sees the disconnect and reconnects through wifiBegin().
+            WiFi.disconnect();
+            break;
+        case LINK_STATIC_IP_FAILED:
+        {
+            ESP_LOGI(TAG, "Gateway %s did not answer ping for %lus, reset to DHCP to acquire IP address and reconnect",
+                     WiFi.gatewayIP().toString().c_str(), windowSecs);
             userConfig->set(cfg_staticIP, false);
             IPAddress ip;
             ip.fromString("0.0.0.0");
@@ -516,73 +712,47 @@ void service_timer_loop()
             // Now try and reconnect...
             wifiConnectTimeout = _millis() + WIFI_CONNECT_TIMEOUT;
             WiFi.reconnect();
+            break;
         }
+        case LINK_RECOVERED:
+            ESP_LOGW(TAG, "Link recovered by WiFi reconnect (healthy %lus), RSSI %d dBm",
+                     LINK_RECOVERED_WINDOWS * windowSecs, WiFi.RSSI());
+            break;
+        default:
+            if (r.evaluated && r.lossPct > 0)
+                ESP_LOGD(TAG, "Link: %u%% gateway ping loss over %lus, RSSI %d dBm", r.lossPct, windowSecs, WiFi.RSSI());
+            break;
+        }
+        return;
     }
-#endif
-}
 
-#ifndef ESP8266
-/****************************************************************************
- * Functions to ping gateway to test network okay
- */
-static void ping_success(esp_ping_handle_t hdl, void *args)
-{
-    uint8_t ttl;
-    uint32_t seqno;
-    uint32_t elapsed_time, recv_len;
-    ip_addr_t target_addr;
-    esp_ping_get_profile(hdl, ESP_PING_PROF_SEQNO, &seqno, sizeof(seqno));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_TTL, &ttl, sizeof(ttl));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_IPADDR, &target_addr, sizeof(target_addr));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_SIZE, &recv_len, sizeof(recv_len));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_TIMEGAP, &elapsed_time, sizeof(elapsed_time));
-    IPAddress ip_addr((uint32_t)target_addr.u_addr.ip4.addr);
-    ESP_LOGI(TAG, "Ping: %d bytes from %s icmp_seq=%d ttl=%d time=%dms",
-             recv_len, ip_addr.toString().c_str(), seqno, ttl, elapsed_time);
-    ping_timed_out = false;
-}
+    if (current_millis - last_check < LINK_CHECK_INTERVAL_MS)
+        return;
+    last_check = current_millis;
 
-static void ping_timeout(esp_ping_handle_t hdl, void *args)
-{
-    uint32_t seqno;
-    ip_addr_t target_addr;
-    esp_ping_get_profile(hdl, ESP_PING_PROF_SEQNO, &seqno, sizeof(seqno));
-    esp_ping_get_profile(hdl, ESP_PING_PROF_IPADDR, &target_addr, sizeof(target_addr));
-    IPAddress ip_addr((uint32_t)target_addr.u_addr.ip4.addr);
-    ESP_LOGI(TAG, "Ping from %s icmp_seq=%d timeout", ip_addr.toString().c_str(), seqno);
-    ping_timed_out = true;
-}
+    if (softAPmode || WiFi.status() != WL_CONNECTED)
+        return;
+    IPAddress gw = WiFi.gatewayIP();
+    if (gw == IPAddress(0, 0, 0, 0))
+        return;
 
-static void ping_end(esp_ping_handle_t hdl, void *args)
-{
-    ping_failure = ping_timed_out;
-    ESP_LOGI(TAG, "Ping end: %s", (ping_failure) ? "failed" : "success");
-}
-
-static void ping_start()
-{
-    ip_addr_t addr;
-    esp_ping_config_t ping_config = ESP_PING_DEFAULT_CONFIG();
-    WiFi.gatewayIP().to_ip_addr_t(&addr);
-    ESP_LOGI(TAG, "Ping to: %s", WiFi.gatewayIP().toString().c_str());
-    ping_config.target_addr = addr;
-    ping_config.count = 2;
-
-    esp_ping_callbacks_t cbs;
-    cbs.on_ping_success = ping_success;
-    cbs.on_ping_timeout = ping_timeout;
-    cbs.on_ping_end = ping_end;
-    cbs.cb_args = NULL;
-    esp_ping_new_session(&ping_config, &cbs, &ping);
-
-    ping_failure = false;
-    ping_timed_out = false;
-    esp_ping_start(ping);
-}
-
-static void ping_stop()
-{
-    esp_ping_stop(ping);
-    esp_ping_delete_session(ping);
+    esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
+    gw.to_ip_addr_t(&cfg.target_addr);
+    cfg.count = LINK_PINGS_PER_CHECK;
+    esp_ping_callbacks_t cbs = {};
+    cbs.on_ping_success = link_ping_noop;
+    cbs.on_ping_timeout = link_ping_noop;
+    cbs.on_ping_end = link_ping_end;
+    link_ping_done.store(false);
+    if (esp_ping_new_session(&cfg, &cbs, &link_ping) != ESP_OK)
+    {
+        link_ping = NULL;
+        return;
+    }
+    if (esp_ping_start(link_ping) != ESP_OK)
+    {
+        esp_ping_delete_session(link_ping);
+        link_ping = NULL;
+    }
 }
 #endif

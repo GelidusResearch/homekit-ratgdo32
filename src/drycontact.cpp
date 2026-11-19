@@ -3,7 +3,7 @@
  * https://ratcloud.llc
  * https://github.com/PaulWieland/ratgdo
  *
- * Copyright (c) 2023-25 David A Kerr... https://github.com/dkerr64/
+ * Copyright (c) 2023-26 David A Kerr... https://github.com/dkerr64/
  * All Rights Reserved.
  * Licensed under terms of the GPL-3.0 License.
  *
@@ -18,6 +18,7 @@
 #include "config.h"
 #include "comms.h"
 #include "drycontact.h"
+#include "encoder.h"
 
 // Logger tag
 static const char *TAG = "ratgdo-drycontact";
@@ -49,8 +50,8 @@ void setup_drycontact()
 
     ESP_LOGI(TAG, "=== Setting up dry contact protocol");
 
-    if (doorControlType == 0)
-        doorControlType = userConfig->getGDOSecurityType();
+    if (doorControlType == DOOR_CONTROL_UNKNOWN)
+        doorControlType = static_cast<door_control_type_t>(userConfig->getGDOSecurityType());
 
     pinMode(DRY_CONTACT_OPEN_PIN, INPUT_PULLUP);
     pinMode(DRY_CONTACT_CLOSE_PIN, INPUT_PULLUP);
@@ -60,10 +61,21 @@ void setup_drycontact()
     buttonClose.setDebounceMs(userConfig->getDCDebounceDuration());
     buttonLight.setDebounceMs(userConfig->getDCDebounceDuration());
 
+#ifdef RATGDO_ENCODER
+    if (userConfig->getEncoderEnabled())
+    {
+        encoder_enabled = true;
+        // Encoder takes over open/close pins — only attach the light button
+        buttonLight.attachPress(onLightSwitchPress);
+        buttonLight.attachLongPressStop(onLightSwitchRelease);
+        drycontact_setup_done = true;
+        return;
+    }
+#endif
     // Attach OneButton handlers
     buttonOpen.attachPress(onOpenSwitchPress);
     buttonClose.attachPress(onCloseSwitchPress);
-    buttonLight.attachPress(onLightSwitchPress);;
+    buttonLight.attachPress(onLightSwitchPress);
     buttonOpen.attachLongPressStop(onOpenSwitchRelease);
     buttonClose.attachLongPressStop(onCloseSwitchRelease);
     buttonLight.attachLongPressStop(onLightSwitchRelease);
@@ -76,12 +88,25 @@ void drycontact_loop()
     if (!drycontact_setup_done)
         return;
 
+    // Poll OneButton objects (light always polled; open/close polled only when encoder not active)
+#ifdef RATGDO_ENCODER
+    if (encoder_enabled)
+    {
+        buttonLight.tick();
+        if (dryContactLightToggle)
+        {
+            toggle_light();
+            dryContactLightToggle = false;
+        }
+        return;
+    }
+#endif
     // Poll OneButton objects
     buttonOpen.tick();
     buttonClose.tick();
     buttonLight.tick();
 
-    if (doorControlType == 3)
+    if (doorControlType == DOOR_CONTROL_DRY_CONTACT)
     {
         if (dryContactDoorOpen)
         {

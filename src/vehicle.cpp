@@ -23,6 +23,7 @@
 #include "vehicle.h"
 #include "homekit.h"
 #include "config.h"
+#include "provision.h"
 
 // Logger tag
 static const char *TAG = "ratgdo-vehicle";
@@ -64,22 +65,19 @@ void setup_vehicle()
     ESP_LOGI(TAG, "=== Setup VL53L1X time-of-flight sensor ===");
 
 #ifdef GRGDO1_V1
-    // GRGDO1 v1: Serial pins conflict with I2C pins, redirect to Serial1
-    Serial1.begin(115200);
-    Serial.end();
-    Serial = Serial1;
+    // GPIO1/3 are shared with UART0. Release its clients and driver before
+    // Wire claims those pins; never copy HardwareSerial driver ownership.
+    release_serial_console_for_i2c();
 #endif
 
     if (!Wire.begin(SENSOR_SDA_PIN, SENSOR_SCL_PIN))
     {
         ESP_LOGE(TAG, "VL53L1X I2C pin setup failed");
-        vehicle_setup_error = true;
+        Wire.end();
 #ifdef GRGDO1_V1
-        // Restore Serial to UART0 for Improv
-        Serial1.end();
-        Serial0.begin(115200);
-        Serial = Serial0;
+        restore_serial_console_after_i2c();
 #endif
+        vehicle_setup_error = true;
         return;
     }
 
@@ -89,13 +87,10 @@ void setup_vehicle()
     {
         ESP_LOGE(TAG, "VL53L1X ToF not detected at address 0x29");
         Wire.end();
-        vehicle_setup_error = true;
 #ifdef GRGDO1_V1
-        // Restore Serial to UART0 for Improv
-        Serial1.end();
-        Serial0.begin(115200);
-        Serial = Serial0;
+        restore_serial_console_after_i2c();
 #endif
+        vehicle_setup_error = true;
         return;
     }
     ESP_LOGI(TAG, "VL53L1X ToF detected at address 0x29");
@@ -117,13 +112,10 @@ void setup_vehicle()
     {
         ESP_LOGE(TAG, "VL53L1X failed to initialize error: %d", status);
         Wire.end();
-        vehicle_setup_error = true;
 #ifdef GRGDO1_V1
-        // Restore Serial to UART0 for Improv
-        Serial1.end();
-        Serial0.begin(115200);
-        Serial = Serial0;
+        restore_serial_console_after_i2c();
 #endif
+        vehicle_setup_error = true;
         return;
     }
 
@@ -131,6 +123,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_SetDistanceMode error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
@@ -138,6 +134,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_SetTimingBudgetInMs error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
@@ -145,6 +145,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_SetInterMeasurementInMs error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
@@ -152,6 +156,10 @@ void setup_vehicle()
     if (status != 0)
     {
         ESP_LOGE(TAG, "VL53L1X_StartRanging error: %d", status);
+        Wire.end();
+#ifdef GRGDO1_V1
+        restore_serial_console_after_i2c();
+#endif
         vehicle_setup_error = true;
         return;
     }
@@ -355,7 +363,7 @@ void calculatePresence(int32_t distance)
     if (vehicleDistance != lastDistance)
     {
 
-        ESP_LOGD(TAG, "Vehicle distance: %dcm (average over %d samples, last changed %d samples ago), current measured: %dcm", vehicleDistance, count, lastChange, distance / 10);
+        ESP_LOGV(TAG, "Vehicle distance: %dcm (average over %d samples, last changed %d samples ago), current measured: %dcm", vehicleDistance, count, lastChange, distance / 10);
         lastDistance = vehicleDistance;
         lastChange = 0;
     }
@@ -387,6 +395,13 @@ void doorOpening()
         return;
 
     presence_timer = _millis();
+
+    // Fire the parking assist laser immediately on door open rather than waiting for
+    // vehicle presence to be confirmed... by the time presence debounces, the door may
+    // already be closed and the vehicle parked, which is too late to assist parking.
+    // Opt-in: off by default so existing distance-triggered behavior is unaffected.
+    if (userConfig->getLaserOnDoorOpen() && userConfig->getAssistDuration() > 0)
+        laser.flash(userConfig->getAssistDuration() * 1000);
 }
 
 // if notified of door closing, check for arrived/departed vehicle within time window (looking back)
@@ -401,5 +416,14 @@ void doorClosing()
     {
         setArriveDepart(vehicleDetected);
     }
+}
+
+// if notified of door obstructed, set timeout during which we check for arriving/departing vehicle (looking forward)
+void doorObstructed()
+{
+    if (!vehicle_setup_done)
+        return;
+
+    presence_timer = _millis();
 }
 #endif // RATGDO32_DISCO
