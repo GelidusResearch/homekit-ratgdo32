@@ -21,15 +21,12 @@
 #include <time.h>
 #ifndef ESP8266
 #include <atomic>
-#include <cstdint>
-#endif
-#ifdef ESP32
-#include <shared_mutex>
-#include <mutex>
 #endif
 
+#ifdef USE_DHT22
 // Third-party sensor libraries
 #include <DHT.h>
+#endif
 
 // ESP system includes
 #include <Ticker.h>
