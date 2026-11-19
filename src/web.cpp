@@ -62,6 +62,9 @@
 #ifdef RATGDO32_DISCO
 #include "vehicle.h"
 #endif
+#ifdef USE_AHT20
+#include "aht20.h"
+#endif
 #include "encoder.h"
 
 // built by "build_web_content.py"
@@ -496,6 +499,27 @@ void web_loop()
 #endif
         }
     }
+#ifdef USE_AHT20
+    else if (aht20_detected) {
+        // Same interval, but the measurement is read on a later pass
+        unsigned long currentMillis = millis();
+        if (lastDHT22Read == 0 || (currentMillis - lastDHT22Read >= DHT22_READ_INTERVAL)) {
+            aht20_start();
+            lastDHT22Read = currentMillis;
+        }
+        float tempCelsius;
+        if (aht20_read(tempCelsius, dht22Hum)) {
+            // Kept in the display format, like the DHT22 reading
+            dht22Temp = (tempFormat == "F" || tempFormat == "f") ? tempCelsius * 9 / 5 + 32 : tempCelsius;
+            if (!isnan(dht22Temp))
+                JSON_ADD_FLOAT("dht22Temp", dht22Temp);
+            if (!isnan(dht22Hum))
+                JSON_ADD_FLOAT("dht22Hum", dht22Hum);
+            if (!isnan(tempCelsius) && !isnan(dht22Hum))
+                notify_homekit_temperature_humidity(tempCelsius, dht22Hum);
+        }
+    }
+#endif
 #endif // USE_DHT22
     if (garage_door.active && garage_door.current_state != lastDoorState)
     {

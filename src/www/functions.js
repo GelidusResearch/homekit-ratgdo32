@@ -802,6 +802,7 @@ function setElementsFromStatus(status) {
 
             case "dht22Temp":
                 document.getElementById("dht22Row").style.display = "table-row";
+                document.getElementById("dht22TempFormatRow").style.display = "table-row"; // also for an AHT20, with no pin
                 // Use stored format from serverStatus (set when dht22TempFormat is processed)
                 var tempFormat = serverStatus.dht22TempFormat || "C";
                 document.getElementById(key).innerHTML = value.toFixed(1) + "&deg;" + tempFormat;

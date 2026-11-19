@@ -32,6 +32,9 @@
 #ifdef RATGDO32_DISCO
 #include "vehicle.h"
 #endif
+#ifdef USE_DHT22
+#include "aht20.h"
+#endif
 #ifdef USE_GDOLIB
 #include "gdo.h"
 #else
@@ -1028,8 +1031,8 @@ void setup_homekit()
 
 #ifdef USE_DHT22
     int dht22Pin = userConfig->getDHT22Pin();
-    if (dht22Pin >= 0) {
-        ESP_LOGI(TAG, "Creating Temperature and Humidity Sensor accessory (DHT22 on pin %d)", dht22Pin);
+    if (dht22Pin >= 0 || aht20_detected) {
+        ESP_LOGI(TAG, "Creating Temperature and Humidity Sensor accessory (dht22Pin=%d, aht20_detected=%d)", dht22Pin, aht20_detected);
         new SpanAccessory(HOMEKIT_AID_TEMP_HUMIDITY);
         new DEV_Info("Temperature Sensor");
         tempHumidity = new DEV_TempHumidity();

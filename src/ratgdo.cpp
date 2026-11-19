@@ -52,6 +52,9 @@
 #ifdef RATGDO_ENCODER
 #include "encoder.h"
 #endif
+#ifdef USE_AHT20
+#include "aht20.h"
+#endif
 
 // Logger tag
 static const char *TAG = "ratgdo-main";
@@ -280,6 +283,9 @@ void setup()
 #endif
 #ifdef RATGDO32_DISCO
     setup_vehicle();
+#endif
+#ifdef USE_AHT20
+    setup_aht20();
 #endif
 #ifndef USE_GDOLIB
     setup_drycontact();
